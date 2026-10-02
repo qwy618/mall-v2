@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.14</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.macro.mall</groupId>
+    <artifactId>mall-v2</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>mall-v2</name>
+    <description>mall 商城项目 - 父工程，只负责依赖版本管理，不写业务代码</description>
+
+    <modules>
+        <module>mall-common</module>
+        <module>mall-mbg</module>
+        <module>mall-service</module>
+        <module>mall-admin</module>
+        <module>mall-portal</module>
+        <!-- portal / search / security / demo 后续阶段再加 -->
+    </modules>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- 自定义版本：Spring Boot 未托管的依赖才需要写版本 -->
+        <mall.version>1.0-SNAPSHOT</mall.version>
+        <mybatis-plus.version>3.5.7</mybatis-plus.version>
+        <hutool.version>5.8.32</hutool.version>
+        <!-- JWT：0.12.x 需要 api + impl + jackson 三件套 -->
+        <jjwt.version>0.12.6</jjwt.version>
+    </properties>
+
+    <!--
+      dependencyManagement 只做两件事：
+      1. 声明版本号，子模块引入时不用写 version
+      2. 保证全项目版本统一
+      注意：它【不会】真的把依赖引进来，子模块必须在自己的 dependencies 里声明
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- 内部模块 -->
+            <dependency>
+                <groupId>com.macro.mall</groupId>
+                <artifactId>mall-common</artifactId>
+                <version>${mall.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.macro.mall</groupId>
+                <artifactId>mall-mbg</artifactId>
+                <version>${mall.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.macro.mall</groupId>
+                <artifactId>mall-service</artifactId>
+                <version>${mall.version}</version>
+            </dependency>
+
+            <!-- MyBatis-Plus：注意 Spring Boot 3 必须用 spring-boot3-starter -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
+
+            <!-- 工具类库 -->
+            <dependency>
+                <groupId>cn.hutool</groupId>
+                <artifactId>hutool-all</artifactId>
+                <version>${hutool.version}</version>
+            </dependency>
+
+            <!-- JWT：0.12.x 需要 api + impl + jackson 三件套，版本由父工程管理 -->
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-api</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-impl</artifactId>
+                <version>${jjwt.version}</version>
+                <scope>runtime</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-jackson</artifactId>
+                <version>${jjwt.version}</version>
+                <scope>runtime</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

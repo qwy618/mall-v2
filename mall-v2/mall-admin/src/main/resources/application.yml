@@ -1,0 +1,72 @@
+server:
+  port: 8080
+
+spring:
+  # 真实凭据（数据库/Redis 密码、阿里云 OSS AccessKey、JWT 密钥等）请放在 application-local.yml，
+  # 该文件已在 .gitignore 中；可复制 application-local.yml.example 自行创建。
+  # 若未提供，下面的占位符会走默认值，项目仍能启动（仅涉及 OSS 的功能不可用）。
+  profiles:
+    include: local
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/mall_v2?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:123456}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: /
+  jackson:
+    # 返回 JSON 时忽略 null 字段（自检清单第 8 条）
+    default-property-inclusion: non_null
+    time-zone: GMT+8
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+      password: ${REDIS_PASSWORD:}
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+mybatis-plus:
+  # mapper.xml 统一放在 mall-mbg 的 resources/mapper 下
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-aliases-package: com.macro.mall.mbg.model
+  configuration:
+    # 下划线转驼峰：create_time -> createTime
+    map-underscore-to-camel-case: true
+    # 开发期打印 SQL，上线前记得关掉
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      # 逻辑删除字段名（你在 orders 表加的那个字段）
+      logic-delete-field: deleteStatus
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+logging:
+  level:
+    com.macro.mall: debug
+
+# 阶段4：JWT 配置
+jwt:
+  # HS256 要求密钥 ≥ 32 字节（256 bit）；生产请换成随机强密钥
+  secret: ${JWT_SECRET:dev-only-jwt-secret-please-change-me-32bytes-minimum}
+  # 过期时间（秒）：604800 = 7 天
+  expiration: 604800
+  # token 前缀，前端拼接为 tokenHead + token 后放入 Authorization 头
+  tokenHead: "Bearer "
+
+# 阿里云 OSS（图片上传）
+oss:
+  endpoint: ${OSS_ENDPOINT:https://oss-cn-beijing.aliyuncs.com}
+  access-key-id: ${OSS_ACCESS_KEY_ID:}
+  access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
+  bucket: ${OSS_BUCKET:}
+  base-url: ${OSS_BASE_URL:}

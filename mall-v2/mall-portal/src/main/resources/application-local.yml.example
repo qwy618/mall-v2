@@ -1,0 +1,27 @@
+# 复制为 application-local.yml（同目录）后填写你的真实配置。
+# application-local.yml 已在 .gitignore 中，不会被提交。
+server:
+  port: 8081
+
+spring:
+  datasource:
+    password: your-mysql-password
+  rabbitmq:
+    host: 127.0.0.1
+    password: guest
+  data:
+    redis:
+      host: 127.0.0.1
+      password:
+
+jwt:
+  secret: please-change-to-a-random-32-bytes-secret
+
+elasticsearch:
+  host: 127.0.0.1
+
+oss:
+  access-key-id:
+  access-key-secret:
+  bucket:
+  base-url:

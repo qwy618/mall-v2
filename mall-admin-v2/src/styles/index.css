@@ -1,0 +1,208 @@
+:root {
+  /* 品牌主色：陶土橙（D 暖沙琥珀风，与 C 端同一品牌语言） */
+  --mall-primary: #c0744f;
+  --mall-primary-dark: #a5623f;
+  --mall-primary-gradient: linear-gradient(135deg, #cd8560 0%, #a5623f 100%);
+  --mall-primary-soft: #f7ece0;
+  --mall-price: #b5633f;
+
+  /* Element Plus 主色系覆盖（暖陶土阶） */
+  --el-color-primary: #c0744f;
+  --el-color-primary-light-3: #cf9373;
+  --el-color-primary-light-5: #ddb198;
+  --el-color-primary-light-7: #e9cbb9;
+  --el-color-primary-light-8: #f2ddcd;
+  --el-color-primary-light-9: #f7ece0;
+  --el-color-primary-dark-2: #9e5f3b;
+
+  /* 布局与中性色（暖沙系） */
+  --admin-bg: #faf5ef;
+  --admin-card: #fffdfb;
+  --admin-text: #2e2419;
+  --admin-text-regular: #6b5d4d;
+  --admin-text-light: #b0a08c;
+  --admin-border: #ece2d8;
+
+  /* 侧边栏 / 顶栏 */
+  --admin-aside-bg: linear-gradient(180deg, #fdf8f1 0%, #f9f0e4 100%);
+  --admin-aside-active-bg: #f7ece0;
+  --admin-aside-active-bar: #c0744f;
+  --admin-header-bg: #fffdfb;
+
+  /* 语义辅助色（暖调低饱和） */
+  --admin-ok: #5a8a6a;
+  --admin-warn: #c08a3e;
+  --admin-sand: #e3cfba;
+
+  /* Element Plus 语义色覆盖（暖化 danger/success/warning/info，避免后台红绿黄过冷） */
+  --el-color-success: #5a8a6a;
+  --el-color-success-light-3: #83a98e;
+  --el-color-success-light-5: #a3c0aa;
+  --el-color-success-light-7: #c4d6c9;
+  --el-color-success-light-8: #d6e2da;
+  --el-color-success-light-9: #e8efea;
+  --el-color-success-dark-2: #486e54;
+
+  --el-color-warning: #c08a3e;
+  --el-color-warning-light-3: #d3a96e;
+  --el-color-warning-light-5: #e0c094;
+  --el-color-warning-light-7: #ecd6bb;
+  --el-color-warning-light-8: #f2e2cc;
+  --el-color-warning-light-9: #f7ecdc;
+  --el-color-warning-dark-2: #9a6e32;
+
+  --el-color-danger: #c0584a;
+  --el-color-danger-light-3: #d18a80;
+  --el-color-danger-light-5: #dda9a2;
+  --el-color-danger-light-7: #e9c9c5;
+  --el-color-danger-light-8: #f0d9d6;
+  --el-color-danger-light-9: #f7e7e5;
+  --el-color-danger-dark-2: #9a473c;
+
+  --el-color-info: #8a7a68;
+  --el-color-info-light-3: #a89788;
+  --el-color-info-light-5: #c2b4a6;
+  --el-color-info-light-7: #ddd2c6;
+  --el-color-info-light-8: #e8e0d6;
+  --el-color-info-light-9: #f2ece4;
+  --el-color-info-dark-2: #6e6152;
+
+  /* 兼容别名：个别页面误用了 --color-* 命名，统一指向 D 风 token，避免变量缺失导致样式失效 */
+  --color-text-primary: var(--admin-text);
+  --color-text-secondary: var(--admin-text-regular);
+  --color-text-tertiary: var(--admin-text-light);
+  --color-background-secondary: var(--mall-primary-soft);
+  --color-background-tertiary: #f3e8dc;
+
+  /* 圆角 + 暖阴影 + 衬线标题 */
+  --admin-radius: 8px;
+  --admin-radius-lg: 12px;
+  --admin-shadow: 0 2px 10px rgba(150, 110, 80, 0.08);
+  --mall-font-serif: 'Noto Serif SC', 'Songti SC', 'SimSun', Georgia, serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+  font-size: 14px;
+  color: var(--admin-text);
+  background-color: var(--admin-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== Element Plus 全局暖化微调 ===== */
+/* 卡片 */
+.el-card {
+  border-radius: var(--admin-radius-lg);
+  border-color: var(--admin-border);
+  background: var(--admin-card);
+  color: var(--admin-text);
+}
+.el-card__header {
+  border-bottom-color: var(--admin-border);
+}
+
+/* 表格 */
+.el-table {
+  --el-table-border-color: var(--admin-border);
+  --el-table-header-bg-color: #faf3ea;
+  --el-table-header-text-color: var(--admin-text-regular);
+  --el-table-row-hover-bg-color: #fdf6ec;
+  --el-table-text-color: var(--admin-text);
+  border-radius: var(--admin-radius);
+}
+.el-table th.el-table__cell {
+  font-weight: 600;
+}
+
+/* 按钮 / 输入 / 弹窗圆角 */
+.el-button {
+  border-radius: var(--admin-radius);
+}
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner {
+  border-radius: var(--admin-radius);
+}
+.el-dialog {
+  border-radius: var(--admin-radius-lg);
+}
+.el-message-box {
+  border-radius: var(--admin-radius-lg);
+}
+.el-tag {
+  border-radius: 6px;
+}
+.el-pagination {
+  --el-pagination-button-bg-color: var(--admin-card);
+}
+.el-drawer__header {
+  margin-bottom: 12px;
+  color: var(--admin-text);
+  font-weight: 600;
+}
+
+/* 面包屑 */
+.el-breadcrumb__inner {
+  color: var(--admin-text-light);
+}
+.el-breadcrumb__item:last-child .el-breadcrumb__inner {
+  color: var(--admin-text);
+  font-weight: 600;
+}
+
+/* 现代细滚动条（暖调） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #dccbb8;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c9b29a;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ===== 页面标题（卡片头 / 弹窗 / 抽屉）统一衬线，强化 D 风语言 ===== */
+.el-card__header .header-bar > span {
+  font-family: var(--mall-font-serif);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--admin-text);
+  letter-spacing: 0.5px;
+}
+.el-dialog__title {
+  font-family: var(--mall-font-serif);
+  font-weight: 600;
+  color: var(--admin-text);
+}
+.el-drawer__title {
+  font-family: var(--mall-font-serif);
+  font-weight: 600;
+  color: var(--admin-text);
+}
+
+/* 卡片内边距统一（暖色呼吸感） */
+.el-card__body {
+  padding: 20px;
+}
+
+/* 主内容区留白，避免贴边 */
+.admin-main {
+  padding: 20px;
+}

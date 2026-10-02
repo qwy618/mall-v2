@@ -1,0 +1,180 @@
+:root {
+  /* 品牌主色：暖色生活方式 · 陶土橙 terracotta */
+  --mall-primary: #c0744f;
+  --mall-primary-dark: #a85d3b;
+  --mall-primary-light: #d29376;
+  --mall-primary-soft: #f7e9e1;
+  --mall-primary-gradient: linear-gradient(135deg, #d29376 0%, #c0744f 100%);
+
+  /* Element Plus 主色派生（陶土橙色阶，保证 hover/active 一致） */
+  --el-color-primary: #c0744f;
+  --el-color-primary-light-3: #cd8a6b;
+  --el-color-primary-light-5: #dba98a;
+  --el-color-primary-light-7: #edd2c2;
+  --el-color-primary-light-8: #f3ded3;
+  --el-color-primary-light-9: #f9ece5;
+  --el-color-primary-dark-2: #a85d3b;
+
+  /* 中性：暖米灰阶 */
+  --mall-bg: #faf5ef;
+  --mall-card: #fffdfb;
+  --mall-text: #3a322c;
+  --mall-text-regular: #6b5f56;
+  --mall-text-light: #a39488;
+  --mall-border: #ece2d8;
+  /* 商品图"舞台底色"：白底商品图 multiply 混合后白底融入此色，避免死白留白 */
+  --mall-stage: #f7ece0;
+
+  /* 价格 / 强调：暖陶土（D 风价格走暖色，不抢红色） */
+  --mall-price: #b5633f;
+
+  /* 圆角：柔和暖感（非 999 大圆角，保留商城辨识度） */
+  --mall-radius-sm: 6px;
+  --mall-radius: 10px;
+  --mall-radius-lg: 14px;
+  --mall-shadow: 0 4px 16px rgba(168, 130, 100, 0.08);
+  --mall-shadow-hover: 0 8px 24px rgba(192, 116, 79, 0.16);
+
+  /* 字体：正文无衬线，标题衬线（中文宋/思源宋/系统宋，fallback 到 serif） */
+  --mall-font-sans: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+  --mall-font-serif: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--mall-font-sans);
+  font-size: 14px;
+  color: var(--mall-text);
+  background-color: var(--mall-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--mall-text-regular);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+a:hover {
+  color: var(--mall-primary);
+}
+
+/* 细滚动条（暖色） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d8ccc0;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c2b3a4;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 通用衬线标题工具类：页面大标题统一衬线气质 */
+.font-serif,
+.serif {
+  font-family: var(--mall-font-serif);
+}
+
+/* 页面主标题：衬线 + 暖色，统一 D 风（暖色生活方式）气质 */
+.page-title {
+  font-family: var(--mall-font-serif);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--mall-text);
+  margin: 0 0 16px;
+  letter-spacing: 0.5px;
+}
+
+/* 暖色"默认"标记：替代 Element Plus 红色 danger tag，贴合陶土橙主色 */
+.tag-default {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  line-height: 16px;
+  padding: 1px 8px;
+  border-radius: var(--mall-radius-sm);
+  color: #fff;
+  background: var(--mall-primary);
+}
+
+/* ============================================================
+   分页器 · 暖色统一（Element Plus 默认蓝色 → 陶土橙 D 风）
+   作用于全站 el-pagination：搜索页 / 商品详情 / 订单列表 / 积分明细
+   ============================================================ */
+.el-pagination {
+  --el-pagination-font-size: 14px;
+  --el-pagination-bg-color: #fff;
+  --el-pagination-text-color: var(--mall-text-regular);
+  --el-pagination-button-color: var(--mall-text-regular);
+  --el-pagination-button-bg-color: #fff;
+  --el-pagination-button-disabled-color: #cbbfb4;
+  --el-pagination-button-disabled-bg-color: #fff;
+  --el-pagination-hover-color: var(--mall-primary);
+  align-items: center;
+}
+.el-pagination .el-pager li,
+.el-pagination button {
+  min-width: 32px;
+  height: 32px;
+  line-height: 30px;
+  margin: 0 3px;
+  background: #fff;
+  border: 1px solid var(--mall-border);
+  border-radius: var(--mall-radius-sm);
+  color: var(--mall-text-regular);
+  font-weight: 500;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.el-pagination .el-pager li:hover,
+.el-pagination button:hover:not(:disabled) {
+  color: var(--mall-primary);
+  border-color: var(--mall-primary-light);
+  background: var(--mall-primary-soft);
+}
+.el-pagination .el-pager li.is-active {
+  color: #fff;
+  background: var(--mall-primary);
+  border-color: var(--mall-primary);
+  font-weight: 700;
+  box-shadow: 0 3px 8px rgba(192, 116, 79, 0.28);
+}
+.el-pagination .el-pager li.is-active:hover {
+  color: #fff;
+  background: var(--mall-primary-dark);
+  border-color: var(--mall-primary-dark);
+}
+.el-pagination button:disabled {
+  color: #cbbfb4;
+  background: #fff;
+  border-color: var(--mall-border);
+  cursor: not-allowed;
+}
+/* 省略号 "..." 不描边 */
+.el-pagination .el-pager li.more {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.el-pagination .el-pagination__total {
+  color: var(--mall-text-light);
+  margin-left: 12px;
+  font-size: 13px;
+}

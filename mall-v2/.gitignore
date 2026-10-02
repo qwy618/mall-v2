@@ -1,0 +1,23 @@
+# ── Maven 构建产物 ──
+target/
+*.jar
+*.war
+*.class
+
+# ── 运行日志 / 临时凭据导出（登录响应里含真实 JWT）──
+*.log
+*-login.json
+*.rdb
+
+# ── IDE ──
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# ── 本地真实配置：数据库密码 / Redis 密码 / JWT 密钥 / 阿里云 OSS AccessKey ──
+# 切勿提交；仓库内只保留带占位符的 application.yml
+**/application-local.yml
+**/application-local.yaml
+**/application-local.properties

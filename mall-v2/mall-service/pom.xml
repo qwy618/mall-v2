@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.macro.mall</groupId>
+        <artifactId>mall-v2</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>mall-service</artifactId>
+    <packaging>jar</packaging>
+    <name>mall-service</name>
+    <description>共享业务服务模块：被 admin 与 portal 共同使用的领域能力（会员等级、积分/成长值），避免同一业务逻辑在两个应用里各写一份</description>
+
+    <dependencies>
+        <!-- 内部模块 -->
+        <dependency>
+            <groupId>com.macro.mall</groupId>
+            <artifactId>mall-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.macro.mall</groupId>
+            <artifactId>mall-mbg</artifactId>
+        </dependency>
+
+        <!-- MyBatis-Plus（提供 LambdaQueryWrapper / BaseMapper / @Transactional 所需的 spring-tx） -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+</project>

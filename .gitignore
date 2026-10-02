@@ -1,0 +1,28 @@
+# ============================================================
+# 本仓库只发布三件套：
+#   mall-v2         —— Spring Boot 3 多模块后端
+#   portal-web      —— C 端（用户端）Vue3 前端
+#   mall-admin-v2   —— 管理端 Vue3 前端
+#
+# 本目录同时放着运行日志、临时文件、构建产物等，
+# 一律不提交。采用「先全部忽略、再逐个放行」的白名单策略，防止漏掉敏感文件。
+# ============================================================
+/*
+
+!/.gitignore
+!/README.md
+
+!/mall-v2/
+!/portal-web/
+!/mall-admin-v2/
+
+# ── 兜底：即便上面放行，这些运行期产物/敏感件也不进仓库 ──
+**/target/
+**/node_modules/
+**/dist*/
+**/*.log
+**/*.rdb
+**/*-login.json
+**/application-local.yml
+**/application-local.yaml
+**/application-local.properties

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.macro.mall.mbg.mapper.OrderItemMapper">
+
+    <insert id="insertBatch" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO order_item
+        (order_id, order_sn, sku_id, sku_code, product_id, product_name,
+        product_pic, product_sn, sp_data, price, quantity,
+        coupon_amount, promotion_amount, integration_amount, real_amount)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.orderId}, #{item.orderSn}, #{item.skuId}, #{item.skuCode},
+            #{item.productId}, #{item.productName}, #{item.productPic}, #{item.productSn},
+            #{item.spData}, #{item.price}, #{item.quantity},
+            #{item.couponAmount}, #{item.promotionAmount}, #{item.integrationAmount}, #{item.realAmount})
+        </foreach>
+
+    </insert>
+
+</mapper>
