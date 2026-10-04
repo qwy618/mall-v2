@@ -13,6 +13,7 @@ import com.macro.mall.mbg.model.*;
 import com.macro.mall.portal.config.MqConstants;
 import com.macro.mall.portal.dao.CreateOrderParam;
 import com.macro.mall.portal.dao.OrderItemParam;
+import com.macro.mall.portal.service.CartService;
 import com.macro.mall.portal.service.OrderIdempotentService;
 import com.macro.mall.portal.service.OrderService;
 import com.macro.mall.portal.vo.OrderDetailVO;
@@ -55,6 +56,7 @@ public class OrderServiceImpl implements OrderService {
     @Autowired private ProductMapper productMapper;
     @Autowired private MemberAddressMapper memberAddressMapper;
     @Autowired private CartItemMapper cartItemMapper;
+    @Autowired private CartService cartService;
     @Autowired private RedissonClient redisson;
     @Autowired private RabbitTemplate rabbitTemplate;
     @Autowired private CouponMapper couponMapper;
@@ -297,6 +299,16 @@ public class OrderServiceImpl implements OrderService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
+                // 购物车缓存失效（债务17 修复）：第 8 步直接物理删行绕过了 CartService，
+                // 必须在此显式失效，否则 /cart/list 命中旧缓存会出现"已下单商品仍在购物车"的幽灵条目。
+                // 放在 afterCommit（而非提交前）是为了让并发读在失效后必定读到已提交的最新行。
+                if (!toDeleteCartIds.isEmpty()) {
+                    try {
+                        cartService.evictCartCache(memberId);
+                    } catch (Exception e) {
+                        log.error("购物车缓存失效失败 memberId={} orderId={}", memberId, orderId, e);
+                    }
+                }
                 // 幂等令牌回填：事务提交成功后才标记完成，避免"标记完成但事务回滚"（债务23）
                 try {
                     orderIdempotentService.finish(memberId, token, orderId);

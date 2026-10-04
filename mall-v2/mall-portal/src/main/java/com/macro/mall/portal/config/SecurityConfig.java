@@ -35,6 +35,10 @@ public class SecurityConfig {
                         .requestMatchers("/member/register", "/member/login").permitAll()
                         .requestMatchers("/coupon/list").permitAll()
                         .requestMatchers("/product/**").permitAll()
+                        // 门店目录类只读数据：游客浏览首页/列表/详情也要用（分类导航、品牌筛选）
+                        .requestMatchers("/category/**", "/brand/**").permitAll()
+                        // 商品评价的公开读取（/comment/product/{id} 与 .../stats）；提交与"我的评价"仍需登录
+                        .requestMatchers("/comment/product/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(exception -> exception

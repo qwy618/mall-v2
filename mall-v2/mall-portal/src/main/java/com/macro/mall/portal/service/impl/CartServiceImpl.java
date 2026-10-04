@@ -198,6 +198,13 @@ public class CartServiceImpl implements CartService {
         return CommonResult.success(null);
     }
 
+    @Override
+    public void evictCartCache(Long memberId) {
+        // 暴露给绕过本 Service 的写路径（下单清车直接物理删行）在事务提交后调用，
+        // 否则下次读命中旧缓存会出现"已下单商品仍在购物车"的幽灵条目
+        invalidate(memberId);
+    }
+
     /** 读购物车原始行：缓存命中(含空车)直接返回；未命中查 DB 并回填（空车也打标记，防穿透） */
     private List<CartItem> loadCartItems(Long memberId) {
         RBucket<String> flag = redisson.getBucket(CACHED_PREFIX + memberId, StringCodec.INSTANCE);
