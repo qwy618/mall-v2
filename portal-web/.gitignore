@@ -17,3 +17,12 @@ pnpm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 .DS_Store
+
+# vite 配置的编译产物：Vite 解析配置时 .js 优先于 .ts，
+# 一旦提交就会变成"影子配置"，导致改了 vite.config.ts 却不生效。
+# 产物已被 tsconfig.node.json 的 outDir 导向 node_modules/.tmp，这里再兜一层。
+vite.config.js
+vite.config.d.ts
+
+# TS 增量编译缓存（build mode 产物），随 tsconfig 变动而变，无提交价值。
+*.tsbuildinfo

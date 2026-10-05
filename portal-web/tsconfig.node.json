@@ -5,7 +5,12 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
-    "strict": true
+    "strict": true,
+    // 关键：本项目 build / type-check 走 `vue-tsc -b`（build mode 会 emit）。
+    // 不指定 outDir 时，vite.config.ts 会被编译成**根目录**的 vite.config.js + .d.ts，
+    // 而 Vite 解析配置时 .js 优先于 .ts —— 表现为「改了 vite.config.ts 完全不生效」。
+    // 把产物导向临时目录，根目录只留唯一的源文件 vite.config.ts。
+    "outDir": "./node_modules/.tmp/node"
   },
   "include": ["vite.config.ts", "vite-env.d.ts"],
   "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo"
