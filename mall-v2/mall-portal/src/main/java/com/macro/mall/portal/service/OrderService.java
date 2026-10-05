@@ -4,10 +4,19 @@ import com.macro.mall.common.CommonPage;
 import com.macro.mall.common.CommonResult;
 import com.macro.mall.mbg.model.Order;
 import com.macro.mall.portal.dao.CreateOrderParam;
+import com.macro.mall.portal.dao.OrderPreviewParam;
 import com.macro.mall.portal.vo.OrderDetailVO;
+import com.macro.mall.portal.vo.OrderPreviewVO;
 
 public interface OrderService {
     CommonResult<Long> createOrder(Long memberId, CreateOrderParam param);
+
+    /**
+     * 订单试算（债务：金额同源）：与 {@link #createOrder} 走**同一段金额计算**，
+     * 但不扣库存、不落库、不消耗幂等令牌、不核销券、不扣积分。
+     * 用于确认卡片 / 结算页展示「应付金额」，保证与最终下单逐分一致。
+     */
+    CommonResult<OrderPreviewVO> preview(Long memberId, OrderPreviewParam param);
     CommonResult<Long> pay(Long memberId, Long orderId);
     CommonResult<Long> cancel(Long memberId, Long orderId);
     CommonResult<Long> confirmReceived(Long memberId, Long orderId);

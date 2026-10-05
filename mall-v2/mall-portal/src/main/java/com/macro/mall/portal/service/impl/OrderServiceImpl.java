@@ -13,10 +13,12 @@ import com.macro.mall.mbg.model.*;
 import com.macro.mall.portal.config.MqConstants;
 import com.macro.mall.portal.dao.CreateOrderParam;
 import com.macro.mall.portal.dao.OrderItemParam;
+import com.macro.mall.portal.dao.OrderPreviewParam;
 import com.macro.mall.portal.service.CartService;
 import com.macro.mall.portal.service.OrderIdempotentService;
 import com.macro.mall.portal.service.OrderService;
 import com.macro.mall.portal.vo.OrderDetailVO;
+import com.macro.mall.portal.vo.OrderPreviewVO;
 import com.macro.mall.service.MemberLevelService;
 import com.macro.mall.service.MemberPointsService;
 import lombok.extern.slf4j.Slf4j;
@@ -135,132 +137,41 @@ public class OrderServiceImpl implements OrderService {
         // 3. 订单号（Redisson 原子自增，按日）
         String orderSn = getOrderSn();
 
-        // 4. 遍历：原子扣库存 + 价格快照 + 累加 total 与 couponBase（券适用商品小计）
-        BigDecimal total = BigDecimal.ZERO;
-        BigDecimal couponBase = BigDecimal.ZERO;
-        List<OrderItem> items = new ArrayList<>();
+        // 4. 解析行项目（**只读**：查 SKU/商品、校验购物车归属、算行小计与券适用范围）
+        //    注意：本步骤不再扣库存，扣库存单独抽到 deductStock（见第 6 步），
+        //    以便 preview 复用「解析 + 算钱」而跳过「扣库存」。
+        List<ResolvedItem> rows = resolveItems(memberId, param.getItems(), coupon);
+        // 4.1 收集结算后要清理的购物车条目
         List<Long> toDeleteCartIds = new ArrayList<>();
-        for (OrderItemParam ip : param.getItems()) {
-            if (ip.getQuantity() == null || ip.getQuantity() <= 0) {
-                throw new BusinessException("数量必须大于0");
-            }
-            Sku sku = skuMapper.selectById(ip.getSkuId());
-            if (sku == null) throw new BusinessException("商品不存在");
-            if (ip.getCartItemId() != null) {
-                CartItem ci = cartItemMapper.selectById(ip.getCartItemId());
-                if (ci == null || !memberId.equals(ci.getMemberId())) {
-                    throw new BusinessException("购物车项不存在");
-                }
-                toDeleteCartIds.add(ip.getCartItemId());
-            }
-            int rows = skuMapper.update(null, new LambdaUpdateWrapper<Sku>()
-                    .eq(Sku::getId, ip.getSkuId())
-                    .ge(Sku::getStock, ip.getQuantity())
-                    .setSql("stock = stock - " + ip.getQuantity()));
-            if (rows == 0) throw new BusinessException("库存不足");
-
-            Product product = productMapper.selectById(sku.getProductId());
-            BigDecimal lineAmount = sku.getPrice().multiply(BigDecimal.valueOf(ip.getQuantity()));
-            total = total.add(lineAmount);
-
-            // 判断该商品是否属于券的适用范围（混合商品按券适用小计核算）
-            boolean applies = false;
-            if (coupon != null) {
-                Integer useType = coupon.getUseType();
-                if (useType == null || useType == 0) {            // 全场通用
-                    applies = true;
-                } else if (useType == 1) {                        // 指定分类
-                    applies = product != null && coupon.getCategoryId() != null
-                            && coupon.getCategoryId().equals(product.getCategoryId());
-                } else if (useType == 2) {                        // 指定商品
-                    applies = product != null && coupon.getProductId() != null
-                            && coupon.getProductId().equals(product.getId());
-                }
-            }
-            if (applies) {
-                couponBase = couponBase.add(lineAmount);
-            }
-
-            OrderItem oi = new OrderItem();
-            oi.setOrderSn(orderSn);
-            oi.setSkuId(sku.getId());
-            oi.setSkuCode(sku.getSkuCode());
-            oi.setProductId(sku.getProductId());
-            oi.setProductName(product != null ? product.getName() : "");
-            // 取图口径与购物车一致：优先 SKU 图，SKU 无图回退 SPU 商品图
-            // （本项目 SKU 多数无独立图，只取 sku.pic 会让订单项图存空 → 前端回退文字占位）
-            oi.setProductPic(StringUtils.hasText(sku.getPic())
-                    ? sku.getPic()
-                    : (product != null ? product.getPic() : null));
-            oi.setProductSn(product != null ? product.getProductSn() : "");
-            oi.setSpData(sku.getSpData());
-            oi.setPrice(sku.getPrice());
-            oi.setQuantity(ip.getQuantity());
-            items.add(oi);
+        for (ResolvedItem r : rows) {
+            if (r.cartItemId != null) toDeleteCartIds.add(r.cartItemId);
         }
 
         // 5. 三类优惠插入前一次算定：会员折扣(promotion) → 优惠券(coupon) → 积分抵扣(integration)
+        //    computeAmounts 是**全站唯一的金额计算口径**，preview 与 create 共用同一段代码。
         Member member = memberMapper.selectById(memberId);
         if (member == null) throw new BusinessException("会员不存在");
+        Amounts amounts = computeAmounts(member, rows, coupon, param.getUseIntegration());
 
-        // 5.1 会员折扣（债务18）：按等级折扣率对商品总额打折
-        MemberLevel level = memberLevelService.matchByGrowth(member.getGrowth());
-        int discountRate = level == null || level.getDiscountRate() == null ? 100 : level.getDiscountRate();
-        BigDecimal promotionAmount = BigDecimal.ZERO;
-        if (discountRate < 100) {
-            promotionAmount = total.multiply(BigDecimal.valueOf(100 - discountRate))
-                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
-                    .min(total).max(BigDecimal.ZERO);
-        }
+        // 6. 原子扣库存（唯一"有副作用"的一步，仅 create 调用）
+        deductStock(rows);
 
-        // 5.2 优惠券金额：门槛用券适用小计 couponBase，优惠额不超过该小计
-        BigDecimal couponAmount = BigDecimal.ZERO;
-        if (coupon != null) {
-            BigDecimal min = coupon.getMinPoint() == null ? BigDecimal.ZERO : coupon.getMinPoint();
-            if (couponBase.compareTo(min) < 0) {
-                throw new BusinessException("该优惠券仅适用于部分商品，当前适用金额未达使用门槛");
-            }
-            if (coupon.getAmount() == null || coupon.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
-                throw new BusinessException("优惠券类型不支持");
-            }
-            couponAmount = coupon.getAmount().min(couponBase).setScale(2, RoundingMode.HALF_UP);
-        }
+        // 7. 构建订单项（取图口径：优先 SKU 图，SKU 无图回退 SPU 商品图）
+        List<OrderItem> items = buildOrderItems(orderSn, rows);
 
-        // 5.3 积分抵扣（债务18）：100 积分 = 1 元，上限 = 券后应付（保证实付不为负）
-        BigDecimal beforeIntegration = total.subtract(promotionAmount).subtract(couponAmount)
-                .max(BigDecimal.ZERO);
-        int useIntegration = 0;
-        BigDecimal integrationAmount = BigDecimal.ZERO;
-        Integer requested = param.getUseIntegration();
-        if (requested != null && requested > 0 && beforeIntegration.compareTo(BigDecimal.ZERO) > 0) {
-            int balance = member.getIntegration() == null ? 0 : member.getIntegration();
-            // 金额换算上限（向下取整到分），再与申请量、账户余额取最小
-            int usableByAmount = beforeIntegration
-                    .multiply(BigDecimal.valueOf(MemberPointsService.POINTS_PER_YUAN)).intValue();
-            useIntegration = Math.min(Math.min(requested, balance), usableByAmount);
-            if (useIntegration > 0) {
-                integrationAmount = BigDecimal.valueOf(useIntegration)
-                        .divide(BigDecimal.valueOf(MemberPointsService.POINTS_PER_YUAN), 2, RoundingMode.DOWN);
-            }
-        }
-
-        // 5.4 实付 = 商品总额 + 运费 − 会员折扣 − 优惠券 − 积分抵扣
-        BigDecimal payAmount = total.subtract(promotionAmount).subtract(couponAmount)
-                .subtract(integrationAmount).setScale(2, RoundingMode.HALF_UP).max(BigDecimal.ZERO);
-
-        // 5.5 建订单（金额一次性写全，避免"先插后改"）
+        // 8. 建订单（金额一次性写全，避免"先插后改"）
         Order order = new Order();
         order.setOrderSn(orderSn);
         order.setMemberId(memberId);
         order.setAddressId(param.getAddressId());
-        order.setTotalAmount(total);
+        order.setTotalAmount(amounts.total);
         order.setFreightAmount(BigDecimal.ZERO);
         order.setCouponId(coupon == null ? null : coupon.getId());
-        order.setCouponAmount(couponAmount);
-        order.setPromotionAmount(promotionAmount);
-        order.setUseIntegration(useIntegration);
-        order.setIntegrationAmount(integrationAmount);
-        order.setPayAmount(payAmount);
+        order.setCouponAmount(amounts.couponAmount);
+        order.setPromotionAmount(amounts.promotionAmount);
+        order.setUseIntegration(amounts.useIntegration);
+        order.setIntegrationAmount(amounts.integrationAmount);
+        order.setPayAmount(amounts.payAmount);
         order.setStatus(0);
         order.setDeleteStatus(0);
         order.setReceiverName(addr.getReceiverName());
@@ -274,32 +185,32 @@ public class OrderServiceImpl implements OrderService {
         Long orderId = order.getId();
         recordHistory(orderId, order.getOrderSn(), "会员" + memberId, "CREATE", "提交订单");
 
-        // 6. 优惠券核销（乐观条件更新防并发，回填 orderId；失败抛异常整单回滚）
+        // 9. 优惠券核销（乐观条件更新防并发，回填 orderId；失败抛异常整单回滚）
         if (coupon != null) {
             int n = couponHistoryMapper.useCoupon(memberId, coupon.getId().longValue(), orderId);
             if (n == 0) throw new BusinessException("优惠券不可用或已被使用");
         }
 
-        // 6.5 积分扣减 + 流水（债务18）：条件更新防并发超用，失败抛异常整单回滚
-        if (useIntegration > 0) {
-            memberPointsService.consumeForOrder(memberId, orderId, orderSn, useIntegration);
+        // 9.1 积分扣减 + 流水（债务18）：条件更新防并发超用，失败抛异常整单回滚
+        if (amounts.useIntegration > 0) {
+            memberPointsService.consumeForOrder(memberId, orderId, orderSn, amounts.useIntegration);
         }
 
-        // 6.6 优惠分摊到订单项（债务7：退款按 real_amount 退，防薅羊毛）
-        allocateDiscount(items, promotionAmount, couponAmount, integrationAmount);
+        // 9.2 优惠分摊到订单项（债务7：退款按 real_amount 退，防薅羊毛）
+        allocateDiscount(items, amounts.promotionAmount, amounts.couponAmount, amounts.integrationAmount);
 
-        // 7. 插订单项
+        // 10. 插订单项
         items.forEach(oi -> oi.setOrderId(orderId));
         orderItemMapper.insertBatch(items);
-        // 8. 清购物车项（物理删）
+        // 11. 清购物车项（物理删）
         if (!toDeleteCartIds.isEmpty()) {
             cartItemMapper.deleteBatchIds(toDeleteCartIds);
         }
-        // 9. 事务提交后发送延迟消息
+        // 12. 事务提交后发送延迟消息
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                // 购物车缓存失效（债务17 修复）：第 8 步直接物理删行绕过了 CartService，
+                // 购物车缓存失效（债务17 修复）：第 11 步直接物理删行绕过了 CartService，
                 // 必须在此显式失效，否则 /cart/list 命中旧缓存会出现"已下单商品仍在购物车"的幽灵条目。
                 // 放在 afterCommit（而非提交前）是为了让并发读在失效后必定读到已提交的最新行。
                 if (!toDeleteCartIds.isEmpty()) {
@@ -326,6 +237,272 @@ public class OrderServiceImpl implements OrderService {
             }
         });
         return CommonResult.success(orderId);
+    }
+
+    // ==================== 订单试算（债务：金额同源） ====================
+
+    /**
+     * 订单试算：**与下单走同一段金额计算代码**，但不产生任何副作用。
+     *
+     * <p>与 {@link #createOrder} 的差异仅三点：**不扣库存、不落库、不消耗幂等令牌**
+     * （也不核销优惠券、不扣积分）。因此本接口天然幂等、可安全地反复调用，
+     * 供确认卡片、前端结算页展示「应付金额」。
+     *
+     * <p>核心保证：确认卡片上的每个数字都来自 {@link #computeAmounts}——
+     * 与最终 {@code /order/create} 逐分一致，杜绝金额漂移引发的纠纷。
+     */
+    @Override
+    public CommonResult<OrderPreviewVO> preview(Long memberId, OrderPreviewParam param) {
+        if (param.getItems() == null || param.getItems().isEmpty()) {
+            return CommonResult.failed("请选择要结算的商品");
+        }
+
+        // 1. 地址：显式传入则校验归属；未传则取该会员的默认地址（无地址时为 null，不阻断试算）
+        MemberAddress addr = null;
+        if (param.getAddressId() != null) {
+            addr = memberAddressMapper.selectById(param.getAddressId());
+            if (addr == null || !memberId.equals(addr.getMemberId())) {
+                return CommonResult.failed("地址不存在");
+            }
+        } else {
+            addr = memberAddressMapper.selectOne(new LambdaQueryWrapper<MemberAddress>()
+                    .eq(MemberAddress::getMemberId, memberId)
+                    .orderByDesc(MemberAddress::getDefaultStatus)
+                    .last("limit 1"));
+        }
+
+        // 2. 若用券，先取券模板并校验（与 create 同口径）
+        Coupon coupon = null;
+        if (param.getCouponId() != null) {
+            coupon = couponMapper.selectById(param.getCouponId());
+            if (coupon == null) return CommonResult.failed("优惠券不存在");
+            LocalDateTime now = LocalDateTime.now();
+            if (coupon.getStartTime() != null && now.isBefore(coupon.getStartTime()))
+                return CommonResult.failed("优惠券未到使用时间");
+            if (coupon.getEndTime() != null && now.isAfter(coupon.getEndTime()))
+                return CommonResult.failed("优惠券已过期");
+        }
+
+        // 3. 只读解析行项目 + 与 create 同一段金额计算（computeAmounts）
+        Member member = memberMapper.selectById(memberId);
+        if (member == null) return CommonResult.failed("会员不存在");
+        List<ResolvedItem> rows = resolveItems(memberId, param.getItems(), coupon);
+        Amounts amounts = computeAmounts(member, rows, coupon, param.getUseIntegration());
+
+        // 4. 组装 VO：每行明细复用与下单相同的分摊算法（allocateDiscount），保证行实付也同源
+        List<OrderItem> items = buildOrderItems(null, rows);
+        allocateDiscount(items, amounts.promotionAmount, amounts.couponAmount, amounts.integrationAmount);
+
+        OrderPreviewVO vo = new OrderPreviewVO();
+        vo.setAddress(addr);
+        vo.setTotalAmount(amounts.total);
+        vo.setFreightAmount(BigDecimal.ZERO);
+        vo.setPromotionAmount(amounts.promotionAmount);
+        vo.setCouponAmount(amounts.couponAmount);
+        vo.setIntegrationAmount(amounts.integrationAmount);
+        vo.setUseIntegration(amounts.useIntegration);
+        vo.setPayAmount(amounts.payAmount);
+        vo.setLevelName(amounts.levelName);
+        vo.setDiscountRate(amounts.discountRate);
+        List<OrderPreviewVO.PreviewItem> vos = new ArrayList<>();
+        for (OrderItem oi : items) {
+            OrderPreviewVO.PreviewItem pi = new OrderPreviewVO.PreviewItem();
+            pi.setSkuId(oi.getSkuId());
+            pi.setProductId(oi.getProductId());
+            pi.setProductName(oi.getProductName());
+            pi.setProductPic(oi.getProductPic());
+            pi.setSpData(oi.getSpData());
+            pi.setPrice(oi.getPrice());
+            pi.setQuantity(oi.getQuantity());
+            pi.setLineAmount(oi.getPrice().multiply(BigDecimal.valueOf(oi.getQuantity())));
+            pi.setPromotionAmount(oi.getPromotionAmount());
+            pi.setCouponAmount(oi.getCouponAmount());
+            pi.setIntegrationAmount(oi.getIntegrationAmount());
+            pi.setRealAmount(oi.getRealAmount());
+            vos.add(pi);
+        }
+        vo.setItems(vos);
+        return CommonResult.success(vo);
+    }
+
+    // ==================== 抽取的共用方法（preview 与 create 共用，保证口径唯一） ====================
+
+    /** 解析后的行项目：只读快照，供金额计算 / 扣库存 / 建订单项共用。 */
+    private static class ResolvedItem {
+        Sku sku;
+        Product product;
+        int quantity;
+        Long cartItemId;          // 可空：购物车结算时填
+        BigDecimal lineAmount;    // 行原价小计 = price × quantity
+        boolean couponApplies;    // 该行是否落在优惠券适用范围内
+    }
+
+    /** 三类优惠一次性算定的结果（preview 与 create 共用口径）。 */
+    private static class Amounts {
+        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal promotionAmount = BigDecimal.ZERO;
+        BigDecimal couponAmount = BigDecimal.ZERO;
+        BigDecimal integrationAmount = BigDecimal.ZERO;
+        int useIntegration;
+        BigDecimal payAmount = BigDecimal.ZERO;
+        String levelName;
+        Integer discountRate = 100;
+    }
+
+    /**
+     * 把下单入参解析成行项目（**全程只读**：查 SKU/商品、校验购物车归属、算行小计与券适用范围）。
+     * preview 与 create 共用；**不扣库存、不落库**。
+     */
+    private List<ResolvedItem> resolveItems(Long memberId, List<OrderItemParam> params, Coupon coupon) {
+        List<ResolvedItem> rows = new ArrayList<>();
+        for (OrderItemParam ip : params) {
+            if (ip.getQuantity() == null || ip.getQuantity() <= 0) {
+                throw new BusinessException("数量必须大于0");
+            }
+            Sku sku = skuMapper.selectById(ip.getSkuId());
+            if (sku == null) throw new BusinessException("商品不存在");
+            if (ip.getCartItemId() != null) {
+                CartItem ci = cartItemMapper.selectById(ip.getCartItemId());
+                if (ci == null || !memberId.equals(ci.getMemberId())) {
+                    throw new BusinessException("购物车项不存在");
+                }
+            }
+            Product product = productMapper.selectById(sku.getProductId());
+            ResolvedItem r = new ResolvedItem();
+            r.sku = sku;
+            r.product = product;
+            r.quantity = ip.getQuantity();
+            r.cartItemId = ip.getCartItemId();
+            r.lineAmount = sku.getPrice().multiply(BigDecimal.valueOf(ip.getQuantity()));
+            r.couponApplies = couponApplies(coupon, product);
+            rows.add(r);
+        }
+        return rows;
+    }
+
+    /** 判断某商品是否属于优惠券适用范围（混合商品按券适用小计核算）。 */
+    private boolean couponApplies(Coupon coupon, Product product) {
+        if (coupon == null) return false;
+        Integer useType = coupon.getUseType();
+        if (useType == null || useType == 0) return true;                 // 全场通用
+        if (useType == 1) {                                               // 指定分类
+            return product != null && coupon.getCategoryId() != null
+                    && coupon.getCategoryId().equals(product.getCategoryId());
+        }
+        if (useType == 2) {                                               // 指定商品
+            return product != null && coupon.getProductId() != null
+                    && coupon.getProductId().equals(product.getId());
+        }
+        return false;
+    }
+
+    /**
+     * 三类优惠一次性算定：会员折扣(promotion) → 优惠券(coupon) → 积分抵扣(integration)。
+     *
+     * <p><b>全站唯一权威口径</b>：preview 与 create 共用本方法，确认卡金额与下单金额必然逐分一致。
+     * 口径与原 `doCreateOrder` 第 5 步完全一致，仅挪动位置、未改一行算法。
+     */
+    private Amounts computeAmounts(Member member, List<ResolvedItem> rows, Coupon coupon,
+                                   Integer requestedIntegration) {
+        Amounts a = new Amounts();
+        BigDecimal total = BigDecimal.ZERO;
+        BigDecimal couponBase = BigDecimal.ZERO;   // 券适用商品的小计
+        for (ResolvedItem r : rows) {
+            total = total.add(r.lineAmount);
+            if (r.couponApplies) couponBase = couponBase.add(r.lineAmount);
+        }
+        a.total = total;
+
+        // 5.1 会员折扣（债务18）：按等级折扣率对商品总额打折
+        MemberLevel level = memberLevelService.matchByGrowth(member.getGrowth());
+        int discountRate = level == null || level.getDiscountRate() == null ? 100 : level.getDiscountRate();
+        a.discountRate = discountRate;
+        a.levelName = level == null ? null : level.getName();
+        if (discountRate < 100) {
+            a.promotionAmount = total.multiply(BigDecimal.valueOf(100 - discountRate))
+                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP)
+                    .min(total).max(BigDecimal.ZERO);
+        }
+
+        // 5.2 优惠券金额：门槛用券适用小计 couponBase，优惠额不超过该小计
+        if (coupon != null) {
+            BigDecimal min = coupon.getMinPoint() == null ? BigDecimal.ZERO : coupon.getMinPoint();
+            if (couponBase.compareTo(min) < 0) {
+                throw new BusinessException("该优惠券仅适用于部分商品，当前适用金额未达使用门槛");
+            }
+            if (coupon.getAmount() == null || coupon.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException("优惠券类型不支持");
+            }
+            a.couponAmount = coupon.getAmount().min(couponBase).setScale(2, RoundingMode.HALF_UP);
+        }
+
+        // 5.3 积分抵扣（债务18）：100 积分 = 1 元，上限 = 券后应付（保证实付不为负）
+        BigDecimal beforeIntegration = total.subtract(a.promotionAmount).subtract(a.couponAmount)
+                .max(BigDecimal.ZERO);
+        if (requestedIntegration != null && requestedIntegration > 0
+                && beforeIntegration.compareTo(BigDecimal.ZERO) > 0) {
+            int balance = member.getIntegration() == null ? 0 : member.getIntegration();
+            // 金额换算上限（向下取整到分），再与申请量、账户余额取最小
+            int usableByAmount = beforeIntegration
+                    .multiply(BigDecimal.valueOf(MemberPointsService.POINTS_PER_YUAN)).intValue();
+            a.useIntegration = Math.min(Math.min(requestedIntegration, balance), usableByAmount);
+            if (a.useIntegration > 0) {
+                a.integrationAmount = BigDecimal.valueOf(a.useIntegration)
+                        .divide(BigDecimal.valueOf(MemberPointsService.POINTS_PER_YUAN), 2, RoundingMode.DOWN);
+            }
+        }
+
+        // 5.4 实付 = 商品总额 + 运费 − 会员折扣 − 优惠券 − 积分抵扣
+        a.payAmount = total.subtract(a.promotionAmount).subtract(a.couponAmount)
+                .subtract(a.integrationAmount).setScale(2, RoundingMode.HALF_UP).max(BigDecimal.ZERO);
+        // 统一金额精度为 2 位：避免 preview 返回 0 而订单库中是 0.00 的格式差异
+        a.total = a.total.setScale(2, RoundingMode.HALF_UP);
+        a.promotionAmount = a.promotionAmount.setScale(2, RoundingMode.HALF_UP);
+        a.couponAmount = a.couponAmount.setScale(2, RoundingMode.HALF_UP);
+        a.integrationAmount = a.integrationAmount.setScale(2, RoundingMode.HALF_UP);
+        return a;
+    }
+
+    /**
+     * 原子扣库存（**仅 create 调用**）：{@code UPDATE sku SET stock = stock - n WHERE id = ? AND stock >= n}，
+     * 影响行数为 0 即库存不足。preview 绝不调用本方法。
+     */
+    private void deductStock(List<ResolvedItem> rows) {
+        for (ResolvedItem r : rows) {
+            int affected = skuMapper.update(null, new LambdaUpdateWrapper<Sku>()
+                    .eq(Sku::getId, r.sku.getId())
+                    .ge(Sku::getStock, r.quantity)
+                    .setSql("stock = stock - " + r.quantity));
+            if (affected == 0) throw new BusinessException("库存不足");
+        }
+    }
+
+    /**
+     * 由解析结果构建订单项（preview 传 orderSn=null，create 传真实单号）。
+     * 取图口径与购物车一致：**优先 SKU 图，SKU 无图回退 SPU 商品图**。
+     */
+    private List<OrderItem> buildOrderItems(String orderSn, List<ResolvedItem> rows) {
+        List<OrderItem> items = new ArrayList<>();
+        for (ResolvedItem r : rows) {
+            Sku sku = r.sku;
+            Product product = r.product;
+            OrderItem oi = new OrderItem();
+            oi.setOrderSn(orderSn);
+            oi.setSkuId(sku.getId());
+            oi.setSkuCode(sku.getSkuCode());
+            oi.setProductId(sku.getProductId());
+            oi.setProductName(product != null ? product.getName() : "");
+            // 本项目 SKU 多数无独立图，只取 sku.pic 会让订单项图存空 → 前端回退文字占位
+            oi.setProductPic(StringUtils.hasText(sku.getPic())
+                    ? sku.getPic()
+                    : (product != null ? product.getPic() : null));
+            oi.setProductSn(product != null ? product.getProductSn() : "");
+            oi.setSpData(sku.getSpData());
+            oi.setPrice(sku.getPrice());
+            oi.setQuantity(r.quantity);
+            items.add(oi);
+        }
+        return items;
     }
 
 

@@ -6,9 +6,11 @@ import com.macro.mall.common.exception.BusinessException;
 import com.macro.mall.mbg.model.Order;
 import com.macro.mall.portal.component.MemberDetails;
 import com.macro.mall.portal.dao.CreateOrderParam;
+import com.macro.mall.portal.dao.OrderPreviewParam;
 import com.macro.mall.portal.service.OrderIdempotentService;
 import com.macro.mall.portal.service.OrderService;
 import com.macro.mall.portal.vo.OrderDetailVO;
+import com.macro.mall.portal.vo.OrderPreviewVO;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -33,6 +35,15 @@ public class OrderController {
     @PostMapping("/create")
     public CommonResult<Long> create(@RequestBody CreateOrderParam param) {
         return orderService.createOrder(currentMemberId(), param);
+    }
+
+    /**
+     * 订单试算：与 /order/create 同源计算金额，但无任何副作用（不扣库存/不落库/不消耗令牌）。
+     * 供确认卡片与前端结算页展示应付金额。需登录（/order/** 本就要求认证）。
+     */
+    @PostMapping("/preview")
+    public CommonResult<OrderPreviewVO> preview(@RequestBody OrderPreviewParam param) {
+        return orderService.preview(currentMemberId(), param);
     }
 
     @PostMapping("/pay")
