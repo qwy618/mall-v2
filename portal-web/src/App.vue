@@ -63,6 +63,9 @@
 
     <!-- 登录引导弹窗：需登录页面/操作不再硬跳登录页，改为弹窗引导 -->
     <LoginGate />
+
+    <!-- 智能购物助手：右下悬浮球 + 对话面板（登录/注册页不出现） -->
+    <AiAssistant v-if="!route.meta.hideHeader" />
   </div>
 </template>
 
@@ -74,6 +77,7 @@ import { useUserStore } from '@/stores/user'
 import { listCart } from '@/apis/cart'
 import { guestCartCount } from '@/utils/guestCart'
 import LoginGate from '@/components/LoginGate.vue'
+import AiAssistant from '@/components/ai/AiAssistant.vue'
 
 const route = useRoute()
 const router = useRouter()
