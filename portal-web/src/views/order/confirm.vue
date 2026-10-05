@@ -96,9 +96,9 @@
             可用积分 <b>{{ availablePoints }}</b>，本单最多可用 <b>{{ maxUsablePoints }}</b>
           </div>
           <div class="point-tip">
-            100 积分 = 1 元<span v-if="levelInfo">
-              · {{ levelInfo.levelName }}
-              {{ levelInfo.discountRate >= 100 ? '暂无折扣' : levelInfo.discountRate / 10 + ' 折' }}</span>
+            100 积分 = 1 元<span v-if="levelName">
+              · {{ levelName }}
+              {{ discountRate >= 100 ? '暂无折扣' : discountRate / 10 + ' 折' }}</span>
           </div>
         </div>
         <el-switch v-model="usePoint" active-text="使用积分" />
@@ -118,12 +118,12 @@
         <span class="num">￥{{ money(freightAmount) }}</span>
       </div>
       <div class="settle-row" v-if="promotionAmount > 0">
-        <span>会员折扣（{{ levelInfo?.levelName }}）</span>
+        <span>会员折扣（{{ levelName }}）</span>
         <span class="num discount">-￥{{ money(promotionAmount) }}</span>
       </div>
-      <div class="settle-row" v-if="selectedDiscount > 0">
+      <div class="settle-row" v-if="couponAmount > 0">
         <span>优惠券抵扣</span>
-        <span class="num discount">-￥{{ money(selectedDiscount) }}</span>
+        <span class="num discount">-￥{{ money(couponAmount) }}</span>
       </div>
       <div class="settle-row" v-if="integrationAmount > 0">
         <span>积分抵扣（{{ useIntegration }} 积分）</span>
@@ -135,7 +135,7 @@
         <el-button
           type="primary"
           size="large"
-          :disabled="!canSubmit"
+          :disabled="!canSubmit || previewLoading"
           :loading="submitting"
           @click="submit"
         >提交订单</el-button>
@@ -176,18 +176,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getProduct } from '@/apis/product'
 import { listCart } from '@/apis/cart'
 import { listAddresses, addAddress } from '@/apis/address'
-import { createOrder, generateOrderToken } from '@/apis/order'
+import { createOrder, generateOrderToken, previewOrder } from '@/apis/order'
 import { estimateCoupons } from '@/apis/coupon'
 import { getMemberLevel } from '@/apis/member'
 import { formatSpec } from '@/utils/spec'
-import { POINTS_PER_YUAN } from '@/types/member'
-import type { Address } from '@/types/order'
+import type { Address, OrderPreviewVO } from '@/types/order'
 import type { CouponEstimate } from '@/types/coupon'
 import type { MemberLevelVO } from '@/types/member'
 import PicBox from '@/components/PicBox.vue'
@@ -216,7 +215,6 @@ const addrLoading = ref(false)
 const couponEstimates = ref<CouponEstimate[]>([])
 const selectedCouponId = ref<number | null>(null) // null = 不使用
 const couponLoading = ref(false)
-const freightAmount = ref(0) // 当前运费（学习中固定 0）
 
 // ===== 债务18：会员等级（折扣率 + 积分余额）=====
 const levelInfo = ref<MemberLevelVO | null>(null)
@@ -250,10 +248,6 @@ function money(n?: number) {
   return (Number(n) || 0).toFixed(2)
 }
 
-const totalAmount = computed(() =>
-  items.value.reduce((sum, it) => sum + it.price * it.quantity, 0)
-)
-
 const canSubmit = computed(
   () => items.value.length > 0 && selectedAddrId.value != null && !submitting.value
 )
@@ -274,43 +268,73 @@ function couponDesc(coupon: { discount?: number; amount?: number; minPoint?: num
   return '优惠券'
 }
 
-// 已选券的优惠金额（运费固定 0）
-const selectedDiscount = computed(() => {
-  if (selectedCouponId.value == null) return 0
-  const c = couponEstimates.value.find((x) => x.coupon.id === selectedCouponId.value)
-  return c ? couponDiscount(c) : 0
-})
+// ===== M1.4 金额同源：确认页不再本地算钱 =====
+// 所有金额一律取自后端 `POST /order/preview`——它与真正下单 /order/create 共用同一段
+// 计算代码（OrderServiceImpl.computeAmounts），因此卡片金额与最终扣款逐分一致。
+const preview = ref<OrderPreviewVO | null>(null)
+const previewLoading = ref(false)
 
-// ===== 债务18：会员折扣 + 积分抵扣（口径与后端 OrderServiceImpl 一致）=====
-// 会员折扣：按等级折扣率对商品合计打折
-const promotionAmount = computed(() => {
-  const rate = levelInfo.value?.discountRate ?? 100
-  if (rate >= 100) return 0
-  const off = (totalAmount.value * (100 - rate)) / 100
-  return Math.min(totalAmount.value, Math.round(off * 100) / 100)
-})
-
-// 券后应付 = 商品合计 − 会员折扣 − 优惠券（也是积分抵扣的上限）
-const beforeIntegration = computed(() =>
-  Math.max(0, totalAmount.value - promotionAmount.value - selectedDiscount.value)
-)
+// 商品合计 / 运费 / 会员折扣 / 优惠券：均为后端权威值
+const totalAmount = computed(() => Number(preview.value?.totalAmount) || 0)
+const freightAmount = computed(() => Number(preview.value?.freightAmount) || 0)
+const promotionAmount = computed(() => Number(preview.value?.promotionAmount) || 0)
+const couponAmount = computed(() => Number(preview.value?.couponAmount) || 0)
 
 const availablePoints = computed(() => levelInfo.value?.integration ?? 0)
-
-// 本单最多可用积分数：受账户余额与"抵扣后不为负"双重限制
-const maxUsablePoints = computed(() =>
-  Math.min(availablePoints.value, Math.floor(beforeIntegration.value * POINTS_PER_YUAN))
+const levelName = computed(() => preview.value?.levelName ?? levelInfo.value?.levelName ?? '')
+const discountRate = computed(
+  () => preview.value?.discountRate ?? levelInfo.value?.discountRate ?? 100
 )
+
+// 本单最多可用积分：后端按「账户余额 + 券后应付」双重封顶后的结果
+const maxUsablePoints = computed(() => Number(preview.value?.useIntegration) || 0)
 
 // 实际使用积分数（开关关闭时为 0）
 const useIntegration = computed(() => (usePoint.value ? maxUsablePoints.value : 0))
 
-const integrationAmount = computed(
-  () => Math.round((useIntegration.value / POINTS_PER_YUAN) * 100) / 100
+// 积分抵扣金额（开关关闭时为 0）。preview 返回的是「用满积分」场景
+const integrationAmount = computed(() =>
+  usePoint.value ? Number(preview.value?.integrationAmount) || 0 : 0
 )
 
-// 实付 = 商品合计 − 会员折扣 − 优惠券 − 积分抵扣
-const payAmount = computed(() => Math.max(0, beforeIntegration.value - integrationAmount.value))
+// 应付：preview.payAmount 已扣满积分；未使用积分时把积分抵扣加回
+const payAmount = computed(() => {
+  const full = Number(preview.value?.payAmount) || 0
+  const integ = Number(preview.value?.integrationAmount) || 0
+  return Math.max(0, full + (usePoint.value ? 0 : integ))
+})
+
+// 订单试算：不扣库存、不落库、不消耗令牌，可安全反复调用
+async function fetchPreview() {
+  if (items.value.length === 0) {
+    preview.value = null
+    return
+  }
+  previewLoading.value = true
+  try {
+    preview.value = await previewOrder({
+      addressId: selectedAddrId.value,
+      couponId: selectedCouponId.value,
+      items: items.value.map((it) => ({
+        skuId: it.skuId,
+        quantity: it.quantity,
+        cartItemId: it.cartItemId,
+      })),
+      // 传「账户全部积分」：后端按余额与券后应付双重封顶，返回本单最多可用积分数；
+      // 积分开关只决定是否把这份抵扣计入应付，无需重新试算
+      useIntegration: availablePoints.value,
+    })
+  } catch {
+    preview.value = null
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+// 券 / 地址变化都会影响试算结果，重新拉取（积分开关是纯展示，不触发）
+watch([selectedCouponId, selectedAddrId], () => {
+  fetchPreview()
+})
 
 async function fetchLevel() {
   try {
@@ -449,6 +473,7 @@ onMounted(async () => {
       await loadCartCheckout()
     }
     await fetchEstimate()
+    await fetchPreview()
     if (items.value.length === 0) {
       ElMessage.warning('没有可结算的商品')
     }

@@ -15,6 +15,46 @@ export interface CreateOrderParam {
   useIntegration?: number // 本单使用的积分数（债务18）：100 积分 = 1 元，0/不传表示不使用
 }
 
+// 订单试算入参（后端 OrderPreviewParam）：与 CreateOrderParam 的区别是**不含 submitToken**
+// —— 试算不落库、不扣库存、不消耗幂等令牌，只是"下单前的金额预演"
+export interface OrderPreviewParam {
+  addressId?: number | null // 收货地址，可空（空则后端取该会员默认地址）
+  couponId?: number | null // 优惠券模板 id，可空
+  items: OrderItemParam[]
+  useIntegration?: number // 拟使用的积分数，0/不传表示不使用
+}
+
+// 试算行明细（后端 OrderPreviewVO.PreviewItem）：金额分摊与下单同源
+export interface OrderPreviewItem {
+  skuId?: number
+  productId?: number
+  productName?: string
+  productPic?: string // 取图口径优先 SKU 图，无图回退商品图
+  spData?: string // 规格 JSON
+  price?: number
+  quantity?: number
+  lineAmount?: number // 本行原价小计
+  promotionAmount?: number // 本行分摊会员折扣
+  couponAmount?: number // 本行分摊优惠券
+  integrationAmount?: number // 本行分摊积分抵扣
+  realAmount?: number // 本行分摊后实付
+}
+
+// 订单试算结果（后端 OrderPreviewVO）：每个金额都由下单用的同一段代码计算，故逐分一致
+export interface OrderPreviewVO {
+  address?: Address | null
+  items?: OrderPreviewItem[]
+  totalAmount?: number
+  freightAmount?: number
+  promotionAmount?: number // 会员等级折扣金额
+  couponAmount?: number // 优惠券抵扣金额
+  integrationAmount?: number // 积分抵扣金额
+  useIntegration?: number // 后端按「余额 + 券后应付」封顶后实际可用的积分数
+  payAmount?: number
+  levelName?: string | null
+  discountRate?: number | null // 会员折扣率（%）：100 = 原价
+}
+
 // 订单主表（对齐 Order 实体）
 export interface Order {
   id: number

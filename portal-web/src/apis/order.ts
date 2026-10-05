@@ -1,6 +1,12 @@
 import request from '@/utils/request'
 import type { PageResult } from '@/types/product'
-import type { Order, OrderDetailVO, CreateOrderParam } from '@/types/order'
+import type {
+  Order,
+  OrderDetailVO,
+  CreateOrderParam,
+  OrderPreviewParam,
+  OrderPreviewVO,
+} from '@/types/order'
 
 // 获取下单幂等令牌（债务23）：一次性，进入确认订单页时取，提交订单时带回
 export function generateOrderToken() {
@@ -14,6 +20,16 @@ export function generateOrderToken() {
 export function createOrder(param: CreateOrderParam) {
   return request<number>({
     url: '/order/create',
+    method: 'post',
+    data: param,
+  })
+}
+
+// 订单试算（金额同源）：与 /order/create 用同一段代码算钱，但无副作用
+// （不扣库存/不落库/不消耗幂等令牌），可安全反复调用，供确认订单页展示应付金额
+export function previewOrder(param: OrderPreviewParam) {
+  return request<OrderPreviewVO>({
+    url: '/order/preview',
     method: 'post',
     data: param,
   })
