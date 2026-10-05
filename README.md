@@ -1,6 +1,6 @@
 # mall-v2 · 全栈商城项目
 
-> 基于 **Spring Boot 3 + Vue 3** 从 0 到 1 搭建的一套电商系统，包含 **用户端（C 端）**、**管理端（B 端）** 与 **后端服务**。
+> 基于 **Spring Boot 3 + Vue 3** 从 0 到 1 搭建的一套电商系统，包含 **用户端（C 端）**、**管理端（B 端）**、**后端服务** 与 **AI 智能助手**（Python FastAPI + LangGraph）。
 > 领域模型参考开源项目 [macrozheng/mall](https://github.com/macrozheng/mall)，代码与架构为本项目自行实现，用于系统性实战学习。
 
 <p>
@@ -12,6 +12,9 @@
   <img alt="Redis" src="https://img.shields.io/badge/Redis-7-DC382D">
   <img alt="RabbitMQ" src="https://img.shields.io/badge/RabbitMQ-3-FF6600">
   <img alt="Elasticsearch" src="https://img.shields.io/badge/Elasticsearch-7-005571">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11-3776AB">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115-009688">
+  <img alt="LangGraph" src="https://img.shields.io/badge/LangGraph-ReAct-1C3C3C">
 </p>
 
 ---
@@ -39,6 +42,7 @@
 - **后端**：Maven 多模块单体（`common / mbg / service / admin / portal`），统一返回体、全局异常、MyBatis-Plus、JWT 鉴权、RBAC 菜单级权限。
 - **前端**：两个独立的 Vue 3 + Vite + TS + Element Plus 工程，用户端走暖色生活方式风（自建设计令牌），管理端走经典电商后台风。
 - **中间件**：Redis（缓存 / 分布式锁 / 幂等令牌）、RabbitMQ（延迟队列做订单超时取消）、Elasticsearch（商品搜索）、阿里云 OSS（图片对象存储）。
+- **智能助手**：独立的 Python 服务（FastAPI + LangGraph ReAct + DeepSeek），**只通过 REST 调用 portal、不直连数据库、不改动 Java 业务代码**，覆盖「导购问答 → 加购 → 订单确认卡片 → 下单」全链路。
 - **工程化**：每个复杂特性都配 **设计文档 + 可重复运行的 E2E 脚本 + 实机验证截图**。
 
 ---
@@ -71,13 +75,23 @@
 | 评价 | 评价审核、回复、删除 |
 | 看板 | 仪表盘（ECharts 图表 + 订单实时推送 WebSocket，新单置顶 + 提示音） |
 
+### 智能助手（mall-ai-agent）
+
+| 模块 | 能力 |
+|---|---|
+| 对话 | C 端悬浮球 + 抽屉，**SSE 流式输出**（打字机效果）、工具调用过程可见 |
+| 导购 | 商品搜索 / 详情 / 同款推荐 / 个性化推荐（基于收藏） |
+| 交易 | 加购、查看购物车、订单预览、**确认卡片下单**（金额与后端同源试算） |
+| 登录态 | 未登录点「加购 / 下单」触发登录引导，登录后无需重开会话 |
+| 会话 | 多轮上下文 + **长对话四级降级装配**（工具结果标记化 → 中间轮折叠 → LLM 分段摘要 → 超限裁剪） |
+
 ---
 
 ## 三、技术栈
 
 | 层次 | 技术 |
 |---|---|
-| 语言 / 运行时 | Java 21、Node.js 20+ |
+| 语言 / 运行时 | Java 21、Node.js 20+、Python 3.11+ |
 | 后端框架 | Spring Boot 3.5、Spring Security、MyBatis-Plus 3.5.7、JJWT 0.12、Hutool |
 | 数据库 | MySQL 8.0（库名 `mall_v2`） |
 | 缓存 / 分布式 | Redis（Redisson：分布式锁、幂等令牌 Lua、缓存） |
@@ -85,6 +99,7 @@
 | 搜索 | Elasticsearch 7 |
 | 对象存储 | 阿里云 OSS |
 | 前端 | Vue 3.5、Vite 6、TypeScript 5.6、Element Plus 2.9、Pinia、Vue Router、ECharts、Axios |
+| 智能助手 | FastAPI、LangGraph（`create_react_agent`）、DeepSeek（OpenAI 兼容接口）、Redis（会话 / 草稿 / 摘要） |
 | 构建 / 部署 | Maven、npm、Nginx |
 
 ---
@@ -92,18 +107,19 @@
 ## 四、系统架构
 
 ```
-                    ┌──────────────────────┐        ┌──────────────────────┐
-                    │  portal-web (C 端)    │        │ mall-admin-v2 (B 端) │
-                    │  Vue3 + Vite  :3001   │        │ Vue3 + Vite  :5173   │
-                    └───────────┬──────────┘        └───────────┬──────────┘
-                                │ /api                          │ /api + /ws
-                                ▼                               ▼
-                    ┌──────────────────────┐        ┌──────────────────────┐
-                    │  mall-portal  :8081   │        │  mall-admin  :8080   │
-                    │  会员端接口 / 下单     │        │  管理端接口 / 看板    │
-                    └───────────┬──────────┘        └───────────┬──────────┘
-                                └───────────┬───────────────────┘
-                                            ▼
+                        ┌──────────────────────┐        ┌──────────────────────┐
+                        │  portal-web (C 端)    │        │ mall-admin-v2 (B 端) │
+                        │  Vue3 + Vite  :3001   │        │ Vue3 + Vite  :5173   │
+                        └───┬──────────────┬───┘        └───────────┬──────────┘
+                            │ /api         │ /ai                     │ /api + /ws
+                            ▼              ▼                         ▼
+            ┌───────────────────┐  ┌──────────────────┐  ┌──────────────────────┐
+            │ mall-portal :8081 │◄─┤ mall-ai-agent    │  │  mall-admin  :8080   │
+            │ 会员端接口 / 下单  │  │ FastAPI     :8090│  │  管理端接口 / 看板    │
+            └─────────┬─────────┘  │ LangGraph + LLM  │  └──────────┬───────────┘
+                      │            └──────────────────┘             │
+                      └────────────────────┬────────────────────────┘
+                                           ▼
                      ┌─────────────── Maven 多模块单体 ───────────────┐
                      │  mall-common   统一返回体 / 异常 / 工具         │
                      │  mall-mbg      MyBatis-Plus 实体与 Mapper      │
@@ -119,6 +135,7 @@
 ```
 
 > 采用**单体多模块**而非微服务：本项目定位是打牢业务与工程基础，避免过早引入注册中心 / 网关 / RPC 带来的复杂度。
+> 智能助手是唯一独立的功能服务，但它**不碰数据库**，只经 REST 复用 portal 的业务能力（含接口级鉴权），因此不破坏上述单体边界。
 
 ---
 
@@ -137,7 +154,13 @@
 │   └── docs/                 # 设计文档 + sql/ 增量迁移脚本
 │
 ├── portal-web/               # 用户端前端（Vue3 + Vite，开发端口 3001）
-└── mall-admin-v2/            # 管理端前端（Vue3 + Vite，开发端口 5173）
+├── mall-admin-v2/            # 管理端前端（Vue3 + Vite，开发端口 5173）
+│
+└── mall-ai-agent/            # 智能助手服务（Python FastAPI + LangGraph，端口 8090）
+    ├── app/                  # 业务码：agent / llm / sessions / store / summarize / tools
+    ├── docs/                 # 设计文档（生产化设计 / 状态外置 / 长对话装配）
+    ├── scripts/              # 可重复运行的验收脚本（smoke_*）
+    └── .env.example          # 配置模板（DEEPSEEK_API_KEY / portal 地址 / Redis）
 ```
 
 ---
@@ -151,6 +174,7 @@
 | JDK | 21+ |
 | Maven | 3.9+ |
 | Node.js | 20+ |
+| Python | 3.11+（仅智能助手需要） |
 | MySQL | 8.0 |
 | Docker | 用于中间件（可选，也可本地安装） |
 
@@ -211,14 +235,30 @@ cd portal-web && npm install && npm run dev        # http://localhost:3001
 cd mall-admin-v2 && npm install && npm run dev     # http://localhost:5173
 ```
 
-> 两个前端都已配置 Vite 代理：`/api` → 各自后端（C 端 8081、B 端 8080），联调无需额外配置。
+> 两个前端都已配置 Vite 代理：`/api` → 各自后端（C 端 8081、B 端 8080）；用户端另代理 `/ai` → 智能助手（8090），联调无需额外配置。
 
-### 6.5 访问地址与默认账号
+### 6.5 启动智能助手（可选）
+
+```bash
+cd mall-ai-agent
+python -m venv .venv
+. .venv/Scripts/activate         # Windows；macOS/Linux 用 source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example .env             # 填入 DEEPSEEK_API_KEY，按需改 PORTAL_BASE_URL / REDIS_URL
+python -m uvicorn app.main:app --port 8090
+```
+
+> 助手**不直连数据库**，只经 REST 调用 `mall-portal`（`PORTAL_BASE_URL`，默认 `http://localhost:8081`），所以**必须先启动 portal**。
+> 启动后打开用户端，右下角悬浮球即为助手入口；助手自身的 OpenAPI 文档在 http://localhost:8090/docs 。
+
+### 6.6 访问地址与默认账号
 
 | 端 | 地址 | 账号 |
 |---|---|---|
 | 用户端 | http://localhost:3001 | 手机号自助注册 |
 | 管理端 | http://localhost:5173 | `admin` / `macro123`（演示用，生产务必修改） |
+| 智能助手 | http://localhost:8090/docs | 复用用户端登录态 |
 
 ---
 
@@ -253,6 +293,14 @@ oss:
    `application-local.yml` 已在 `.gitignore` 中，**不会被提交**；
    `application.yml` 通过 `spring.profiles.include: local` 自动加载它（文件不存在也能正常启动）。
 
+**智能助手**同样是「只提交模板」：
+
+```bash
+cp mall-ai-agent/.env.example mall-ai-agent/.env
+```
+
+`.env` 里的 `DEEPSEEK_API_KEY` 需自行填写（**仓库内不含真实 key**），该文件已被 `mall-ai-agent/.gitignore` 排除。
+
 ---
 
 ## 八、核心设计要点
@@ -267,6 +315,8 @@ oss:
 - **会员等级与积分**：成长值自动升级、积分 100 分 = 1 元抵扣、按等级倍率赠送、退货按额度回冲。
 - **购物车快照与游客合并**：`cart_item` 落商品快照，未登录用 localStorage 暂存车，登录后合并进会员车。
 - **接口级 RBAC**：角色 → 菜单 → 接口映射，拦截器按菜单权限放行。
+- **助手金额同源**：确认卡片的应付金额来自 `POST /order/preview`，与真正下单**共用同一套金额计算**，杜绝「展示价 ≠ 结算价」。
+- **长对话四级降级装配**：工具结果标记化 → 中间轮折叠 → LLM 分段摘要（以系统消息注入「背景记忆」，**绝不伪装成用户消息**）→ 超限时只裁已被摘要覆盖的最旧轮；**原文只追加不删除，摘要可一键回滚**。
 
 ---
 
@@ -287,6 +337,14 @@ oss:
 | [售后退货与订单流水设计](mall-v2/docs/售后退货与订单流水设计.md) | 退货审核流与操作流水 |
 | [订单域收尾设计](mall-v2/docs/订单域收尾设计.md) | 自动确认收货 / 无效订单 / 积分回冲 |
 
+`mall-ai-agent/docs/` 下为智能助手的设计文档：
+
+| 文档 | 主题 |
+|---|---|
+| [智能助手生产化设计](mall-ai-agent/docs/智能助手生产化设计.md) | 工具映射总表、RAG 结构、里程碑 M0→M4 |
+| [状态外置与下单一公里设计](mall-ai-agent/docs/M1_状态外置与下单一公里设计.md) | Redis 化会话 / 草稿、下单幂等 |
+| [长对话装配设计](mall-ai-agent/docs/M1.5_长对话装配设计.md) | 四级降级、分段摘要、上限裁剪 |
+
 ---
 
 ## 十、已知边界与后续计划
@@ -294,6 +352,7 @@ oss:
 - **支付为 Mock**：无真实支付通道，仅记录支付 / 退款流水。
 - **退款未接入真实渠道**：`payment` 表标记退款状态与金额，不做实际资金划转。
 - **成长值不回冲**：退货只回冲积分，成长值（及其触发的等级）不回退。
+- **助手 RAG 尚未实现**：当前助手只做**工具调用**（结构化查商品 / 加购 / 下单）；面向口碑、手感、适用场景一类的语义检索（M3）尚未开始。
 - **待补**：商品属性表与规格筛选、`min_price` 冗余、商品多图相册、库存锁定与释放、用户名登录。
 - **移动端**：uni-app 端尚未开始。
 
