@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+langchain>=0.3
+langchain-openai
+langgraph
+httpx
+python-dotenv
+sse-starlette
+redis>=5

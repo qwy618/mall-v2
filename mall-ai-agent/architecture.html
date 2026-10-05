@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>mall-ai-agent 架构讲解 & 秋招改进路线</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.7;color:#1a202c;background:#f7fafc;padding:24px;max-width:1180px;margin:0 auto}
+  h1{font-size:30px;color:#1a365d;margin-bottom:8px;border-left:5px solid #3182ce;padding-left:14px}
+  h2{font-size:22px;color:#2c5282;margin:32px 0 14px;padding-left:10px;border-left:4px solid #38a169}
+  h3{font-size:17px;color:#2b6cb0;margin:18px 0 8px}
+  .sub{color:#718096;margin-bottom:24px}
+  .card{background:#fff;border-radius:8px;padding:18px 22px;margin:14px 0;box-shadow:0 1px 4px rgba(0,0,0,.08);border-left:4px solid #cbd5e0}
+  .card.ok{border-left-color:#38a169;background:#f0fff4}
+  .card.warn{border-left-color:#d69e2e;background:#fffaf0}
+  .card.bad{border-left-color:#e53e3e;background:#fff5f5}
+  .card.info{border-left-color:#3182ce;background:#f0f7ff}
+  .tag{display:inline-block;background:#edf2f7;color:#4a5568;border-radius:4px;padding:1px 8px;font-size:13px;margin:0 4px 4px 0}
+  .tag.p0{background:#e6fffa;color:#234e52}
+  .tag.p1{background:#ebf8ff;color:#2a4365}
+  .tag.p2{background:#faf5ff;color:#463560}
+  .tag.p3{background:#fffaf0;color:#6b4423}
+  .tag.p4{background:#f0fff4;color:#22543d}
+  code{background:#2d3748;color:#fbd38d;padding:2px 6px;border-radius:4px;font-family:'Consolas',monospace;font-size:13px}
+  pre{background:#1a202c;color:#e2e8f0;padding:14px 16px;border-radius:6px;overflow:auto;margin:10px 0;font-size:13px;line-height:1.5}
+  pre .k{color:#f6ad55}
+  pre .s{color:#9ae6b4}
+  pre .c{color:#718096;font-style:italic}
+  table{width:100%;border-collapse:collapse;margin:10px 0;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  th,td{border:1px solid #e2e8f0;padding:8px 12px;text-align:left;font-size:14px;vertical-align:top}
+  th{background:#edf2f7;color:#2d374d;font-weight:600}
+  tr:nth-child(even){background:#f7fafc}
+  .arch{background:#fff;border-radius:8px;padding:20px;margin:14px 0;box-shadow:0 1px 4px rgba(0,0,0,.08);font-family:monospace;font-size:13px;line-height:1.5;white-space:pre;color:#2d374d;overflow:auto}
+  .pill{display:inline-block;background:#38a169;color:#fff;border-radius:12px;padding:2px 10px;font-size:12px;margin-right:6px}
+  .pill.gray{background:#718096}
+  .pill.red{background:#e53e3e}
+  .pill.blue{background:#3182ce}
+  .toc{background:#fff;border-radius:8px;padding:14px 20px;margin:14px 0;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  .toc a{color:#3182ce;text-decoration:none;margin-right:14px;font-size:14px;display:inline-block;padding:2px 0}
+  .toc a:hover{text-decoration:underline}
+  ul{padding-left:22px}
+  li{margin:4px 0}
+  .interview{background:linear-gradient(135deg,#fef5e7,#fffaf0);border-left:4px solid #dd6b20}
+  .quote{color:#718096;font-style:italic;border-left:3px solid #cbd5e0;padding-left:12px;margin:10px 0}
+  .priority{font-weight:bold;font-size:12px;padding:2px 8px;border-radius:4px;color:#fff;margin-right:8px}
+  .priority.h{background:#e53e3e}
+  .priority.m{background:#d69e2e}
+  .priority.l{background:#38a169}
+</style>
+</head>
+<body>
+
+<h1>mall-ai-agent 架构讲解 & 秋招改进路线</h1>
+<div class="sub"> mall 商城的 AI 购物助手 · 基于 FastAPI + LangChain + LangGraph + DeepSeek</div>
+
+<div class="toc">
+  <b>目录：</b>
+  <a href="#stack">技术栈</a>
+  <a href="#arch">分层架构</a>
+  <a href="#flow">一次对话的完整流程</a>
+  <a href="#design">关键设计亮点</a>
+  <a href="#gap">距离生产级的差距</a>
+  <a href="#road">改进路线（按秋招价值排序）</a>
+  <a href="#interview">面试话术</a>
+</div>
+
+<h2 id="stack">一、技术栈速览</h2>
+<div class="card info">
+  <span class="pill blue">Web 框架</span> FastAPI + uvicorn（异步、SSE 流式）<br>
+  <span class="pill blue">Agent 编排</span> LangChain + LangGraph（<code>create_react_agent</code> ReAct 状态机）<br>
+  <span class="pill blue">LLM</span> DeepSeek（<code>deepseek-chat</code>，OpenAI 兼容模式）<br>
+  <span class="pill blue">工具调用</span> LangChain <code>@tool</code> 装饰器 + httpx 调 mall Java 微服务<br>
+  <span class="pill blue">上下文透传</span> Python <code>ContextVar</code> 注入 JWT（工具无感拿到 token）<br>
+  <span class="pill blue">会话记忆</span> 进程内 dict + 线程锁（P6 迁 Mongo）<br>
+  <span class="pill blue">人工确认</span> 订单草稿机制（<code>orders.py</code>）<br>
+</div>
+
+<h2 id="arch">二、分层架构（10 个文件，职责清晰）</h2>
+<div class="arch">┌────────────────────────────────────────────────────────┐
+│  H5 前端 (:5174)  ──HTTP/SSE──▶  FastAPI (:8090)        │
+│                                    │                   │
+│                                    ▼                   │
+│                          app/main.py                  │
+│   ┌─────────── 路由层 ───────────┐                    │
+│   │ GET  /health                                    │
+│   │ POST /api/chat        (非流式，调试)            │
+│   │ POST /api/chat/stream (SSE 流式，H5 用)         │
+│   │ GET  /api/chat/history (恢复历史)               │
+│   │ POST /api/chat/clear   (清会话)                 │
+│   └────────────────────────────────┘                  │
+│                                    │                   │
+│              sessions.py (会话记忆) │  orders.py (草稿)│
+│                                    ▼                   │
+│                          app/agent.py                │
+│        SYSTEM_PROMPT(20 条规则) + 7 个工具 注册       │
+│        create_react_agent(llm, tools, prompt)         │
+│                                    │                   │
+│            ┌───────────────────────┼─────────────┐    │
+│            ▼                       ▼             ▼    │
+│       llm.py               tools/*.py      schemas.py │
+│   ChatOpenAI(DeepSeek)    @tool 装饰器     Pydantic   │
+│                            │                         │
+│                            ▼                         │
+│                     tools/mall_client.py             │
+│              httpx + Authorization: Bearer           │
+│                            │                         │
+│              ┌─────────────┴─────────────┐          │
+│              ▼                           ▼          │
+│     mall-search(:8081)            mall-portal(:8085)│
+│     ES 全文检索                   加购/下单/详情    │
+└────────────────────────────────────────────────────────┘</div>
+
+<h3>各文件职责</h3>
+<table>
+  <tr><th>文件</th><th>行数</th><th>职责</th><th>阶段</th></tr>
+  <tr><td><code>app/main.py</code></td><td>302</td><td>FastAPI 入口，SSE 流式编排，把工具事件转成前端事件</td><td><span class="tag p2">P2</span></td></tr>
+  <tr><td><code>app/agent.py</code></td><td>68</td><td>组装 ReAct Agent + 20 条防幻觉 SYSTEM_PROMPT</td><td><span class="tag p1">P1</span></td></tr>
+  <tr><td><code>app/llm.py</code></td><td>16</td><td>ChatOpenAI 工厂，DeepSeek 兼容模式</td><td><span class="tag p0">P0</span></td></tr>
+  <tr><td><code>app/config.py</code></td><td>15</td><td>环境变量读取（dotenv）</td><td><span class="tag p0">P0</span></td></tr>
+  <tr><td><code>app/schemas.py</code></td><td>12</td><td>Pydantic 请求模型</td><td><span class="tag p2">P2</span></td></tr>
+  <tr><td><code>app/sessions.py</code></td><td>79</td><td>进程内会话记忆（线程安全 dict）</td><td><span class="tag p2">P2</span></td></tr>
+  <tr><td><code>app/orders.py</code></td><td>27</td><td>订单草稿一次性存储（防 LLM 篡改）</td><td><span class="tag p3">P3</span></td></tr>
+  <tr><td><code>app/tools/mall_client.py</code></td><td>54</td><td>HTTP 客户端，统一处理 mall 的 code=401/403 怪癖</td><td><span class="tag p1">P1</span></td></tr>
+  <tr><td><code>app/tools/product_tools.py</code></td><td>69</td><td>search_products / show_products / get_product_detail</td><td><span class="tag p1">P1</span></td></tr>
+  <tr><td><code>app/tools/order_tools.py</code></td><td>137</td><td>add_to_cart / preview_order / place_order（含草稿校验）</td><td><span class="tag p3">P3</span></td></tr>
+  <tr><td><code>app/tools/recommend_tools.py</code></td><td>103</td><td>recommend_for_me（基于行为的多路召回）</td><td><span class="tag p4">P4</span></td></tr>
+</table>
+
+<h2 id="flow">三、一次「帮我下单 2 个小米手机」对话的完整流程</h2>
+<div class="arch">用户：帮我下单 2 个小米手机
+  │
+  ▼ POST /api/chat/stream  (H5 携带 JWT)
+main.py:
+  1. sessions.set_token(session_id, JWT)         ← 存 token
+  2. current_token.set(JWT)                      ← 注入 ContextVar
+  3. agent.astream({messages}, stream_mode=['messages','values'])
+  │
+  ▼ LangGraph ReAct 循环开始
+节点1 (model):
+  LLM 思考 → 决定调 search_products(keyword='小米手机')
+  → yield SSE event: tool {name: search_products}
+节点2 (tools):
+  search_products 执行 → mall-search /esProduct/search → 真实商品列表
+节点1 (model):
+  LLM 看到搜索结果 → 决定调 show_products('[28]')
+  → yield SSE event: products {items: [...]}  ← 卡片
+节点1 (model):
+  LLM → 决定调 add_to_cart(product_id=28, quantity=2)
+  → 工具从 current_token.get() 拿 JWT → mall-portal /cart/add
+  → 返回 cartId
+节点1 (model):
+  LLM → 决定调 preview_order(cart_id=...)
+  → main.py 截获 → orders.create_draft() 生成草稿
+  → yield SSE event: confirm {draftId, items, totalAmount}  ← 确认卡片
+  LLM 回复：「请核对订单，点击确认下单按钮」
+  → yield SSE event: token {content: '请核对...'}
+  → yield SSE event: done {}
+  ▼ 暂停，等用户点按钮
+
+用户点击「确认下单」
+  → 前端发新请求，message='确认下单' + 系统消息 'draft_id=xxx'
+  → LLM 收到系统消息 → 调 place_order(draft_id)
+  → orders.pop_draft() 校验 + 销毁草稿 → mall /order/generateOrder
+  → yield SSE event: order {orderId, orderSn}
+  → LLM 回复：「下单成功，订单号 xxx，请尽快支付」</div>
+
+<h2 id="design">四、关键设计亮点（这些是你项目里最值钱的部分）</h2>
+
+<div class="card ok">
+  <h3>① 防幻觉的「卡片过滤链路」</h3>
+  LLM 不能直接给前端发卡片。所有商品卡片必须经过：<br>
+  <code>search_products</code>（拿真实数据）→ <code>show_products</code>（LLM 选 id）→ <code>main.py</code>（用 id 反查真实数据）→ 前端。<br>
+  <b>LLM 编不出不存在的商品卡片</b>，因为卡片数据始终来自工具返回的真实结果。<br>
+  <div class="quote">SYSTEM_PROMPT 规则 5/6 的工程化落地——把"严禁编造"从口号变成代码强约束。</div>
+</div>
+
+<div class="card ok">
+  <h3>② 人工确认下单（Human-in-the-loop）</h3>
+  下单分两步：<code>preview_order</code>（算价、生成草稿）→ 用户点按钮 → <code>place_order</code>（消费草稿、真下单）。<br>
+  草稿一次性使用（<code>orders.pop_draft</code>），LLM 无法篡改购物车 id / 地址 / 金额。<br>
+  <div class="quote">这是 LangGraph 受控流程的雏形——P6 升级到 StateMachine 时这就是面试加分项。</div>
+</div>
+
+<div class="card ok">
+  <h3>③ JWT 透传的 ContextVar 方案</h3>
+  LangChain 工具签名不能带 session 参数（否则 LLM 会自己填）。用 <code>ContextVar</code> 在 <code>main.py</code> 设置 token，<code>order_tools.py</code> 的 <code>_require_token()</code> 直接拿。<br>
+  <div class="quote">解决"无状态工具调用 + 有状态用户身份"的矛盾——面试常考题。</div>
+</div>
+
+<div class="card ok">
+  <h3>④ mall 怪癖的统一封装</h4>
+  <code>mall_client.py</code> 把 mall 接口"HTTP 200 但 body.code=401"的反直觉行为统一处理，对外抛 <code>ToolException</code> 给 LLM 看。<br>
+  <div class="quote">真实业务系统集成的常见坑——能讲清这一点说明你做过真集成。</div>
+</div>
+
+<div class="card ok">
+  <h3>⑤ SSE 事件分层</h3>
+  <code>token / tool / products / product / confirm / order / done / error</code> 8 种事件类型，<br>
+  前端能做打字机效果、显示"正在搜索…"、渲染卡片、拦截确认——比纯文本流式体验好一个量级。
+</div>
+
+<div class="card ok">
+  <h3>⑥ SYSTEM_PROMPT 20 条规则</h3>
+  从"严禁编造价格"到"未指定数量先问库存"，把电商客服的高风险场景都覆盖了。<br>
+  <div class="quote">Prompt Engineering 的实战样本——比"我会写 prompt"有说服力得多。</div>
+</div>
+
+<h2 id="gap">五、距离"生产级"还差什么（现状自评）</h2>
+<table>
+  <tr><th>维度</th><th>现状</th><th>生产级要求</th><th>差距</th></tr>
+  <tr><td>会话持久化</td><td>进程内 dict</td><td>Redis / Mongo</td><td><span class="priority h">高</span>服务重启历史丢失</td></tr>
+  <tr><td>可观测性</td><td>无</td><td>Langfuse/LangSmith + Prometheus</td><td><span class="priority h">高</span>无法定位线上 bad case</td></tr>
+  <tr><td>评估集</td><td>无</td><td>Golden test set + 回归</td><td><span class="priority h">高</span>改 prompt 不知道有没有回归</td></tr>
+  <tr><td>安全</td><td>CORS *</td><td>限流 + Prompt 注入防御</td><td><span class="priority h">高</span>无防护</td></tr>
+  <tr><td>部署</td><td>uvicorn 单进程</td><td>Docker + Gunicorn + Nginx</td><td><span class="priority m">中</span>无法上生产</td></tr>
+  <tr><td>知识库</td><td>无</td><td>Chroma + RAG</td><td><span class="priority m">中</span>无法答商品详情/评价</td></tr>
+  <tr><td>成本控制</td><td>无</td><td>token 预算 + 模型路由</td><td><span class="priority m">中</span>每轮全量历史</td></tr>
+  <tr><td>多轮规划</td><td>ReAct 自由循环</td><td>LangGraph 受控状态机</td><td><span class="priority l">低</span>已有雏形</td></tr>
+  <tr><td>多模态</td><td>无</td><td>图片商品识别</td><td><span class="priority l">低</span>视业务</td></tr>
+</table>
+
+<h2 id="road">六、改进路线（按秋招面试价值排序）</h2>
+
+<div class="card warn">
+  <h3><span class="priority h">P5</span>RAG 知识库（商品/评价）</h3>
+  <b>价值</b>：面试最爱问"你做过 RAG 吗"。这是项目从"工具调用"升级到"知识增强"的关键一步。<br>
+  <b>做什么</b>：<br>
+  <ul>
+    <li>用 Chroma 把商品 description / 评价摘要向量化（用 bge-small-zh 嵌入模型）</li>
+    <li>新增工具 <code>kb_search(query)</code>：用户问"小米 14 拍照怎么样"时召回相关评价</li>
+    <li>检索结果作为上下文塞给 LLM，回答有依据</li>
+  </ul>
+  <b>面试加分</b>：能讲 chunking 策略、嵌入模型选型、重排序、引用溯源。<br>
+  <b>工作量</b>：2-3 天
+</div>
+
+<div class="card warn">
+  <h3><span class="priority h">P6</span>Langfuse 全链路追踪</h3>
+  <b>价值</b>：没有可观测性的 LLM 系统不能上生产。这是"工程能力"的直接证明。<br>
+  <b>做什么</b>：<br>
+  <ul>
+    <li>接入 Langfuse（开源，自建或云版），记录每次 LLM 调用的 prompt/response/token/cost</li>
+    <li>每个工具调用打 trace，看到 ReAct 每一步的输入输出</li>
+    <li>加 Prometheus 指标：QPS、P99 延迟、工具失败率、token 消耗</li>
+  </ul>
+  <b>面试加分</b>：能讲"我怎么定位线上一个 bad case"——95% 候选人答不上来。<br>
+  <b>工作量</b>：1 天
+</div>
+
+<div class="card warn">
+  <h3><span class="priority h">P7</span>评估集 + LLM-as-judge</h3>
+  <b>价值</b>：工业级 LLM 应用的核心能力。"改 prompt 不会回归"是生产最大风险。<br>
+  <b>做什么</b>：<br>
+  <ul>
+    <li>写 30 条 golden test：典型 query + 期望行为（应调哪些工具、不应编造什么）</li>
+    <li>用 DeepSeek 当 judge，给每次回复打分（工具选择正确性 / 幻觉率 / 语气）</li>
+    <li>CI 跑评估集，分数下降就 block 合并</li>
+  </ul>
+  <b>面试加分</b>：直接对标 OpenAI Evals / LangSmith——高级岗位加分项。<br>
+  <b>工作量</b>：2 天
+</div>
+
+<div class="card warn">
+  <h3><span class="priority h">P8</span>会话持久化（Redis）</h3>
+  <b>价值</b>：现在重启服务所有用户对话历史丢失——这是真实生产事故级别的问题。<br>
+  <b>做什么</b>：把 <code>sessions.py</code> 的 dict 换成 Redis（hash 结构），<code>orders.py</code> 草稿同样入 Redis 带 TTL。<br>
+  <b>面试加分</b>：能讲"为什么不用 MySQL 存对话历史"——序列化成本 / 读写模式 / TTL 过期。<br>
+  <b>工作量</b>：半天
+</div>
+
+<div class="card warn">
+  <h3><span class="priority m">P9</span>LangGraph 受控状态机</h3>
+  <b>价值</b>：从 <code>create_react_agent</code>（自由 ReAct）升级到自定义 StateMachine——下单流程变成强约束状态图。<br>
+  <b>做什么</b>：定义状态节点 <code>SEARCH → DETAIL → CONFIRM_QTY → CART → PREVIEW → AWAIT_CONFIRM → ORDER</code>，<br>
+  每个节点限制 LLM 只能调特定工具，跳转条件由代码而非 LLM 决定。<br>
+  <b>面试加分</b>：能讲"为什么 ReAct 不够用"——LLM 自由度过高，受控流保证合规。<br>
+  <b>工作量</b>：2 天
+</div>
+
+<div class="card warn">
+  <h3><span class="priority m">P10</span>安全加固</h3>
+  <ul>
+    <li>CORS 白名单（替换 <code>allow_origins=["*"]</code>）</li>
+    <li>限流：slowapi 按 token 限流，防恶意刷 token</li>
+    <li>Prompt 注入防御：用户输入做敏感词过滤 + 系统提示用 delimiter 包裹</li>
+    <li>工具白名单：LLM 不能调未注册的工具（已是默认，但加显式校验）</li>
+  </ul>
+  <b>面试加分</b>：能讲 LLM 安全攻防——OWASP LLM Top 10 现在是热点。<br>
+  <b>工作量</b>：1 天
+</div>
+
+<div class="card warn">
+  <h3><span class="priority m">P11</span>Docker 化 + CI/CD</h3>
+  <ul>
+    <li>写 Dockerfile（python:3.13-slim 基础镜像）</li>
+    <li>docker-compose 一键起 agent + Redis + mall</li>
+    <li>GitHub Actions：lint → test → build → push</li>
+  </ul>
+  <b>面试加分</b>：全栈工程化的最后一公里。<br>
+  <b>工作量</b>：1 天
+</div>
+
+<div class="card warn">
+  <h3><span class="priority l">P12</span>性能与成本优化</h3>
+  <ul>
+    <li>历史消息压缩：超过 20 条用 LLM 总结成 200 字摘要（节省 token）</li>
+    <li>模型路由：简单意图（查物流）用 <code>deepseek-chat</code>，复杂推理用 <code>deepseek-reasoner</code></li>
+    <li>商品搜索结果缓存：Redis 缓存 5 分钟，热门关键词命中率 80%+</li>
+  </ul>
+  <b>面试加分</b>：能讲"LLM 应用的成本结构"——按 token 计费下的工程取舍。<br>
+  <b>工作量</b>：1-2 天
+</div>
+
+<h2 id="interview">七、秋招面试话术（这个项目怎么讲）</h2>
+
+<div class="card interview">
+  <h3>一句话定位</h3>
+  "我做了个电商 AI 购物助手，作为 mall 商城的第 4 个微服务（Python），<br>
+  用 LangChain + LangGraph 编排 ReAct 循环，通过工具调用 mall 的 Java 后端完成搜索/加购/下单全闭环，<br>
+  关键设计是防幻觉的卡片过滤链路和人工确认下单的草稿机制。"
+</div>
+
+<div class="card interview">
+  <h3>常被追问的问题 & 你该怎么答</h3>
+  <table>
+    <tr><th>问题</th><th>回答要点</th></tr>
+    <tr><td>LLM 会不会编造商品价格？</td><td>不会。所有商品卡片数据来自工具返回，<code>show_products</code> 只是 LLM 选 id，<code>main.py</code> 用 id 反查真实数据。LLM 没有发卡片的代码路径。</td></tr>
+    <tr><td>下单怎么防止 LLM 乱来？</td><td>两步走：preview 生成草稿（cart_id/address_id/amount 都是后端算的），用户点确认后 place_order 只消费草稿、不能改参数；草稿一次性销毁。</td></tr>
+    <tr><td>JWT 怎么传给工具？</td><td>LangChain 工具签名不能带 session 参数。用 ContextVar 在请求入口注入，工具调 <code>_require_token()</code> 取。无状态工具 + 有状态用户的解法。</td></tr>
+    <tr><td>会话历史怎么存？</td><td>现在进程内 dict（线程锁），P8 升级 Redis。保留 48 条含工具消息，因为"买第一款"这种指代要靠工具消息里的 id。</td></tr>
+    <tr><td>怎么观测线上问题？</td><td>现在只能看日志。规划中是 Langfuse 全链路 trace + Prometheus 指标，能定位到每个 LLM 调用的 prompt/response/cost。</td></tr>
+    <tr><td>怎么防止 prompt 注入？</td><td>规划中：delimiter 包裹用户输入 + 关键词过滤 + 工具白名单显式校验。OWASP LLM Top 10 这块我也研究过。</td></tr>
+    <tr><td>为什么用 DeepSeek 不用 GPT？</td><td>成本（deepseek-chat 比 gpt-4o 便宜 20 倍）+ 国内合规 + 中文电商场景效果好。OpenAI 兼容模式让切换零成本。</td></tr>
+  </table>
+</div>
+
+<div class="card interview">
+  <h3>项目亮点的"三板斧"</h3>
+  <ol>
+    <li><b>防幻觉设计</b>：把"严禁编造"从 prompt 规则落到代码强约束（卡片过滤链路）。</li>
+    <li><b>受控流程</b>：下单必须人工确认，草稿机制保证 LLM 无法篡改订单参数。</li>
+    <li><b>工程化思维</b>：从 P0 演进到 P12，每一步有清晰的"为什么这么做"。</li>
+  </ol>
+</div>
+
+<div class="card info">
+  <h3>秋招投递建议</h3>
+  <ul>
+    <li><b>AI/大模型岗</b>（应用层）：突出 RAG（P5）+ 评估集（P7）+ Langfuse（P6）</li>
+    <li><b>后端开发岗</b>：突出 LangGraph 受控流（P9）+ Redis 持久化（P8）+ Docker（P11）</li>
+    <li><b>全栈岗</b>：全部讲，重点是 H5 + SSE + 全闭环</li>
+    <li><b>大厂</b>（字节/阿里/腾讯）：必须有评估集和可观测性，否则被认为"玩具项目"</li>
+    <li><b>创业公司</b>：讲清"我能一个人把 AI 应用从 0 到 1 上线"</li>
+  </ul>
+</div>
+
+<div class="quote" style="margin-top:30px;text-align:center">
+  这份架构文档基于你当前的 <code>app/</code> 10 个文件实际代码生成，所有改动建议都对应到具体文件。<br>
+  按 P5 → P6 → P7 → P8 顺序做，秋招前 1-2 周能把项目从"能跑"升级到"能讲"。
+</div>
+
+</body>
+</html>
