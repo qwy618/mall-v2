@@ -165,6 +165,17 @@ function userText(): string {
   flex-direction: column;
   gap: 8px;
   max-width: 100%;
+  animation: bubble-in 0.24s ease-out both;
+}
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* ---------- 用户气泡 ---------- */
@@ -182,21 +193,49 @@ function userText(): string {
   word-break: break-word;
 }
 
-/* ---------- 助手 ---------- */
+/* ---------- 助手 ----------
+ * 用 grid 而不是 flex row：头像占第 1 列，parts 全部落到第 2 列并各自成行。
+ * 这样无需给模板加包裹层（parts 是 v-for 直出的），头像也不会被当成一个 part。
+ */
 .bubble--assistant {
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 8px;
+  align-items: start;
+}
+.bubble--assistant > * {
+  grid-column: 2;
+  min-width: 0;
+}
+/* 头像：跨越所有行，只出现在第一行左侧 */
+.bubble--assistant::before {
+  content: 'M';
+  grid-column: 1;
+  grid-row: 1;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--mall-primary-gradient);
+  color: #fff;
+  font-family: var(--mall-font-serif);
+  font-weight: 800;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .bubble--assistant .bubble__text {
   background: var(--mall-card);
   border: 1px solid var(--mall-border);
   color: var(--mall-text);
   border-radius: 2px var(--mall-radius) var(--mall-radius) var(--mall-radius);
-  padding: 8px 12px;
+  padding: 9px 12px;
   font-size: 13px;
-  line-height: 1.65;
+  line-height: 1.72;
   white-space: pre-wrap;
   word-break: break-word;
-  max-width: 92%;
+  max-width: 100%;
 }
 .bubble--error .bubble__text {
   border-color: #e8c4c4;
@@ -254,7 +293,7 @@ function userText(): string {
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  max-width: 92%;
+  max-width: 100%;
 }
 
 /* 加购成功 */
@@ -263,7 +302,7 @@ function userText(): string {
   gap: 10px;
   align-items: center;
   width: 100%;
-  max-width: 92%;
+  max-width: 100%;
   padding: 8px 10px;
   background: var(--mall-primary-soft);
   border: 1px solid #efd9cb;
@@ -311,7 +350,7 @@ function userText(): string {
 /* 下单成功 */
 .order {
   width: 100%;
-  max-width: 92%;
+  max-width: 100%;
   padding: 12px;
   background: #f2f8f3;
   border: 1px solid #cfe3d2;

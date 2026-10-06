@@ -12,7 +12,7 @@
 import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, Delete, Promotion } from '@element-plus/icons-vue'
+import { ArrowRight, Close, Delete, Promotion } from '@element-plus/icons-vue'
 import AiBubble from './AiBubble.vue'
 import AssistantBellIcon from './AssistantBellIcon.vue'
 import { clearChatSession, streamChat } from '@/apis/ai'
@@ -35,6 +35,20 @@ const sending = ref(false)
 const msgs = ref<AiMsg[]>([])
 const confirmState = ref<Record<string, 'pending' | 'confirmed' | 'done' | 'canceled'>>({})
 const bodyEl = ref<HTMLElement | null>(null)
+const inputEl = ref<HTMLTextAreaElement | null>(null)
+
+/** 输入框随内容增高（1~4 行），避免长问题在小框里来回滚 */
+function autoGrow() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, 92)}px`
+}
+/** 发送/清空后收回单行高度 */
+function resetInput() {
+  const el = inputEl.value
+  if (el) el.style.height = 'auto'
+}
 
 /** 会话 id：持久化，刷新后仍是同一段记忆 */
 const SESSION_KEY = 'ai_session_id'
@@ -152,6 +166,7 @@ async function send(text?: string, opts: { asSystem?: boolean; silent?: boolean 
     msgs.value.push({ id: uid(), role: 'user', parts: [{ kind: 'text', text: content }] })
   }
   draft.value = ''
+  resetInput()
 
   // 必须是 reactive 对象：push 进数组后，流式回调仍会继续改它（appendText / streaming / error）。
   // 若用普通对象，那些修改发生在**原始对象**上，绕过了响应式代理的依赖通知，
@@ -279,13 +294,17 @@ onBeforeUnmount(() => ctrl?.abort())
           </div>
         </header>
 
-        <div ref="bodyEl" class="ai__body">
-          <!-- 空态 -->
+        <div ref="bodyEl" class="ai__body" :class="{ 'ai__body--empty': msgs.length === 0 }">
+          <!-- 空态：能力引导页（比「一行欢迎语 + 几个小按钮」更容易知道能问什么） -->
           <div v-if="msgs.length === 0" class="ai__welcome">
+            <span class="ai__welcome-avatar">M</span>
             <p class="ai__hello">你好，我是小 M</p>
-            <p class="ai__hello-sub">想找点什么？我可以帮您挑商品、加入购物车，也能直接下单。</p>
-            <div class="ai__quick">
-              <button v-for="q in QUICK" :key="q" type="button" @click="onQuick(q)">{{ q }}</button>
+            <p class="ai__hello-sub">帮你挑商品、加入购物车，也能直接下单。<br />试试下面这些：</p>
+            <div class="ai__cards">
+              <button v-for="q in QUICK" :key="q" class="ai__card" type="button" @click="onQuick(q)">
+                <span>{{ q }}</span>
+                <el-icon class="ai__card-go" :size="13"><ArrowRight /></el-icon>
+              </button>
             </div>
           </div>
 
@@ -302,18 +321,35 @@ onBeforeUnmount(() => ctrl?.abort())
         </div>
 
         <footer class="ai__foot">
-          <textarea
-            v-model="draft"
-            class="ai__input"
-            rows="1"
-            placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
-            :disabled="sending"
-            @keydown.enter.exact.prevent="send()"
-          />
-          <button v-if="!sending" class="ai__send" type="button" :disabled="!draft.trim()" @click="send()">
-            <el-icon :size="16"><Promotion /></el-icon>
-          </button>
-          <button v-else class="ai__send ai__send--stop" type="button" @click="stop">停止</button>
+          <!-- 快捷问题常驻：有对话后仍能一键追问，不用自己想措辞 -->
+          <div v-if="msgs.length > 0" class="ai__chips">
+            <button v-for="q in QUICK" :key="q" type="button" @click="onQuick(q)">{{ q }}</button>
+          </div>
+
+          <div class="ai__composer">
+            <textarea
+              ref="inputEl"
+              v-model="draft"
+              class="ai__input"
+              rows="1"
+              placeholder="说点什么…"
+              :disabled="sending"
+              @input="autoGrow"
+              @keydown.enter.exact.prevent="send()"
+            />
+            <button
+              v-if="!sending"
+              class="ai__send"
+              type="button"
+              title="发送"
+              :disabled="!draft.trim()"
+              @click="send()"
+            >
+              <el-icon :size="15"><Promotion /></el-icon>
+            </button>
+            <button v-else class="ai__send ai__send--stop" type="button" @click="stop">停止</button>
+          </div>
+          <p class="ai__hint">Enter 发送 · Shift + Enter 换行</p>
         </footer>
       </section>
     </transition>
@@ -350,9 +386,8 @@ onBeforeUnmount(() => ctrl?.abort())
   right: 28px;
   top: 122px;
   z-index: 2001;
-  width: 384px;
-  height: 580px;
-  max-height: calc(100vh - 150px);
+  width: 400px;
+  height: min(640px, calc(100vh - 150px));
   display: flex;
   flex-direction: column;
   background: var(--mall-bg);
@@ -427,108 +462,202 @@ onBeforeUnmount(() => ctrl?.abort())
 .ai__body {
   flex: 1;
   overflow-y: auto;
-  padding: 14px;
+  padding: 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+}
+/* 空态垂直居中：避免「内容贴顶 + 下方一大片空白」 */
+.ai__body--empty {
+  justify-content: center;
 }
 
-/* 空态 */
+/* ---------- 空态：能力引导 ---------- */
 .ai__welcome {
-  padding: 6px 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0 4px;
+}
+.ai__welcome-avatar {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--mall-primary-gradient);
+  color: #fff;
+  font-family: var(--mall-font-serif);
+  font-size: 25px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 20px rgba(192, 116, 79, 0.26);
+  margin-bottom: 12px;
 }
 .ai__hello {
   margin: 0 0 6px;
   font-family: var(--mall-font-serif);
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--mall-text);
 }
 .ai__hello-sub {
-  margin: 0 0 14px;
+  margin: 0 0 18px;
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.75;
   color: var(--mall-text-light);
 }
-.ai__quick {
+.ai__cards {
+  width: 100%;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
 }
-.ai__quick button {
-  font-size: 12px;
-  color: var(--mall-text-regular);
+.ai__card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
   background: var(--mall-card);
   border: 1px solid var(--mall-border);
+  border-radius: var(--mall-radius);
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--mall-text);
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease,
+    transform 0.18s ease;
+}
+.ai__card:hover {
+  color: var(--mall-primary-dark);
+  border-color: var(--mall-primary-light);
+  background: var(--mall-primary-soft);
+  transform: translateX(2px);
+}
+.ai__card-go {
+  flex-shrink: 0;
+  color: var(--mall-text-light);
+}
+.ai__card:hover .ai__card-go {
+  color: var(--mall-primary);
+}
+
+/* ---------- 输入区 ---------- */
+.ai__foot {
+  flex-shrink: 0;
+  padding: 8px 12px 10px;
+  background: var(--mall-card);
+  border-top: 1px solid var(--mall-border);
+}
+
+/* 常驻快捷问题：多了就横向滑 */
+.ai__chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scrollbar-width: none;
+}
+.ai__chips::-webkit-scrollbar {
+  display: none;
+}
+.ai__chips button {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--mall-text-regular);
+  background: var(--mall-bg);
+  border: 1px solid var(--mall-border);
   border-radius: 999px;
-  padding: 6px 12px;
+  padding: 5px 11px;
   cursor: pointer;
   transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
-.ai__quick button:hover {
+.ai__chips button:hover {
   color: var(--mall-primary);
   border-color: var(--mall-primary-light);
   background: var(--mall-primary-soft);
 }
 
-/* 输入区 */
-.ai__foot {
-  flex-shrink: 0;
+/* 一体化输入框：输入与发送同处一个圆角容器，聚焦时整框高亮 */
+.ai__composer {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--mall-card);
-  border-top: 1px solid var(--mall-border);
+  gap: 6px;
+  padding: 5px 5px 5px 12px;
+  border: 1px solid var(--mall-border);
+  border-radius: 14px;
+  background: var(--mall-bg);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.ai__composer:focus-within {
+  border-color: var(--mall-primary-light);
+  box-shadow: 0 0 0 3px rgba(192, 116, 79, 0.1);
 }
 .ai__input {
   flex: 1;
+  min-width: 0;
   resize: none;
-  border: 1px solid var(--mall-border);
-  border-radius: var(--mall-radius);
-  background: var(--mall-bg);
-  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  padding: 7px 0;
   font-size: 13px;
   font-family: inherit;
   color: var(--mall-text);
-  line-height: 1.5;
+  line-height: 1.55;
   outline: none;
-  max-height: 84px;
-}
-.ai__input:focus {
-  border-color: var(--mall-primary-light);
+  max-height: 92px;
 }
 .ai__input::placeholder {
   color: #c3b6a8;
 }
 .ai__send {
   flex-shrink: 0;
-  height: 34px;
-  min-width: 44px;
-  padding: 0 12px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border: none;
-  border-radius: var(--mall-radius);
+  border-radius: 50%;
   background: var(--mall-primary-gradient);
   color: #fff;
-  font-size: 13px;
-  font-weight: 600;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: filter 0.18s ease;
+  transition: filter 0.18s ease, background 0.18s ease;
 }
 .ai__send:disabled {
   background: #e2d5c9;
   cursor: not-allowed;
 }
 .ai__send:not(:disabled):hover {
-  filter: brightness(1.05);
+  filter: brightness(1.06);
 }
 .ai__send--stop {
+  width: auto;
+  min-width: 46px;
+  padding: 0 12px;
+  border-radius: 999px;
   background: #fff;
   color: var(--mall-text-regular);
   border: 1px solid var(--mall-border);
+  font-size: 12px;
+}
+.ai__send--stop:hover {
+  color: var(--mall-primary);
+  border-color: var(--mall-primary-light);
+  background: var(--mall-primary-soft);
+}
+.ai__hint {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: var(--mall-text-light);
+  text-align: right;
 }
 
 /* 动画 */
