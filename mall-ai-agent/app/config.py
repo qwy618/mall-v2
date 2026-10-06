@@ -154,3 +154,16 @@ CORS_ALLOW_ORIGIN_REGEX = os.getenv(
 
 # 日志脱敏：日志与异常堆栈里绝不出现 token / 密钥 / 手机号
 LOG_REDACT = os.getenv("LOG_REDACT", "1").lower() not in ("0", "false", "no")
+
+# ---------------------------------------------------------------- 可观测（M4.3）
+# 日志输出格式：text（开发可读，默认）| json（一行一条，交采集系统）。
+# 生产建议 json；本地看日志还是文本顺眼，故默认 text。
+LOG_FORMAT = os.getenv("LOG_FORMAT", "text").strip().lower()
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+
+# 核心指标：/api/metrics 暴露当日聚合（工具成功率/拒答率/延迟分位/订单转化）。
+# 关掉后仍照常统计（写 Redis），只是不暴露端点。
+METRICS_ENABLED = os.getenv("METRICS_ENABLED", "1").lower() not in ("0", "false", "no")
+# 可选访问令牌：非空时 /api/metrics 需携带 `?token=` 或 `X-Metrics-Token` 头。
+# 生产环境该端点应置于内网或加鉴权——它会泄露流量规模与错误率。
+METRICS_TOKEN = os.getenv("METRICS_TOKEN", "")

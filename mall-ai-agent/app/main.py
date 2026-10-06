@@ -9,7 +9,9 @@
 """
 import json
 import logging
+import secrets
 import sys
+import time
 from pathlib import Path
 
 # 支持两种运行方式：
@@ -28,20 +30,18 @@ from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from sse_starlette.sse import EventSourceResponse
 
-from . import config, guard, logmask, orders, scheduler, sessions, store, summarize
+from . import (config, guard, logmask, metrics, orders, scheduler, sessions,
+               store, summarize, trace)
 from .agent import build_agent
 from .schemas import ChatRequest, ClearRequest
 from .tools.mall_client import NeedLoginError, resolve_member_id
 from .tools.order_tools import current_member, current_session, current_token
 
-# 让应用自身的 INFO 日志（Redis 自检 / 定时索引启动）能进终端与日志文件：
-# uvicorn 只配置它自己的 logger，root 默认 WARNING → 不显式设置的话这些日志会被吞掉，
-# 出问题时"什么都看不到"。只在 root 没 handler 时生效（basicConfig 自带幂等判断）。
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
-# M4.2：把脱敏 formatter 装到上面的 handler 上（连 exc_info 堆栈一起脱），
-# 并把 httpx/httpcore 等压到 WARNING——它们 DEBUG 时会打印 Authorization 头
-logmask.install()
+# 日志总装配（M4.2 脱敏 + M4.3 traceId 注入/JSON 输出）：格式由 LOG_FORMAT 控制。
+# 放这里而不是交给 uvicorn：uvicorn 只配置它自己的 logger，root 默认 WARNING，
+# 不显式装配就会把应用自身的 INFO 日志（Redis 自检、定时索引、治理拦截）全吞掉。
+# basicConfig 自带幂等判断，只在 root 无 handler 时生效。
+logmask.setup()
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +72,16 @@ app.add_middleware(
     allow_origins=["*"] if _allow_all else config.CORS_ALLOW_ORIGINS,
     allow_origin_regex=None if _allow_all else config.CORS_ALLOW_ORIGIN_REGEX,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", trace.TRACE_HEADER],
+    # 浏览器默认只能读到少数「安全列表」响应头；不 expose 的话 JS 读不到 X-Trace-Id，
+    # 前端就无法把它显示给用户（报障时凭编号定位整条链路）
+    expose_headers=[trace.TRACE_HEADER],
 )
+
+# M4.3 链路追踪：解析/生成 traceId → set contextvar → 回写响应头。
+# 必须用纯 ASGI 中间件（原因见 app/trace.py）。放在 CORS 之外层（后 add = 更外层），
+# 这样连 CORS 预检的响应也会带上 traceId 头。
+app.add_middleware(trace.TraceIdMiddleware)
 
 # 懒加载单例：create_react_agent 编译出的图线程安全，可跨请求复用。
 # 分两个槽位缓存：primary 用主模型；fallback 用降级模型
@@ -92,6 +100,23 @@ def get_agent(degraded: bool = False):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/metrics")
+def api_metrics(request: Request, token: str | None = None):
+    """当日核心指标快照（M4.3）：工具成功率 / 拒答率 / 订单转化 / 延迟分位 / token 用量。
+
+    默认开放（开发期直接 curl 看）。运维上该端点会泄露流量规模与错误率，
+    生产应置于内网；若需暴露在公网，配 `METRICS_TOKEN` 后必须带令牌访问。
+    """
+    if not config.METRICS_ENABLED:
+        return JSONResponse(status_code=404, content={"error": "metrics disabled"})
+    if config.METRICS_TOKEN:
+        got = token or request.headers.get("x-metrics-token") or ""
+        # compare_digest 而非 ==：避开按字符提前返回的时序侧信道（顺手为之，成本为零）
+        if not secrets.compare_digest(got, config.METRICS_TOKEN):
+            return JSONResponse(status_code=403, content={"error": "forbidden"})
+    return metrics.snapshot()
 
 
 @app.get("/api/chat/history")
@@ -234,46 +259,71 @@ def chat(req: ChatRequest, request: Request):
     同样过治理门禁——不因为是「调试接口」就留后门。
     """
     session_id = req.session_id or "default"
+    trace_ses = trace.set_session(session_id)         # M4.3：后续日志带 sessionId
+    t0 = time.perf_counter()
     member_id = resolve_member_id(req.token)          # M1：会话归属绑定会员
-    decision = guard.check(guard.ip_of(request), member_id)
-    if not decision.allowed:
-        return JSONResponse(status_code=429, content=decision.as_event())
-    try:
-        agent = get_agent(degraded=decision.degraded)
-    except RuntimeError as e:
-        return JSONResponse(status_code=503, content={"error": str(e)})
-    # 读路径：从事实源做分级装配（可能被压缩），只读、不落库
-    sent, n_stored = sessions.assemble_history(session_id, member_id, _incoming(req))
-    summarize.maybe_schedule(session_id, member_id)   # T3：惰性异步压摘要，不阻塞本轮
-    tok_ctx = current_token.set(req.token or None)
-    ses_ctx = current_session.set(session_id)
-    mem_ctx = current_member.set(member_id)
     usage = guard.TokenUsageCollector()               # M4：本轮 token 计量
+    toolcb = metrics.ToolUsageCollector()             # M4.3：本轮工具成功/失败
+    outcome, reply = "error", ""
+    tok_ctx = ses_ctx = mem_ctx = None
     try:
-        result = agent.invoke({"messages": sent}, config={"callbacks": [usage]})
-    except NeedLoginError:
-        # 未登录：返回 401 + 跳转指令，前端据此跳登录页
-        return JSONResponse(status_code=401, content={
-            "need_login": True,
-            "message": "请先登录后再进行此操作",
-            "redirect": "/login",
-        })
-    except Exception as e:  # noqa: BLE001
-        # M4：不回原始异常文本（可能含内网地址/连接串/栈帧），原文只进日志
-        code, message = guard.classify_exception(e)
-        logger.exception("非流式对话失败 code=%s", code)
-        return JSONResponse(status_code=502, content={"error": message, "code": code})
+        decision = guard.check(guard.ip_of(request), member_id)
+        if not decision.allowed:
+            outcome = "blocked"
+            logger.info("治理拦截 surface=http code=%s", decision.code,
+                        extra={"surface": "http", "code": decision.code})
+            return JSONResponse(status_code=429, content=decision.as_event())
+        try:
+            agent = get_agent(degraded=decision.degraded)
+        except RuntimeError as e:
+            return JSONResponse(status_code=503, content={"error": str(e)})
+        # 读路径：从事实源做分级装配（可能被压缩），只读、不落库
+        sent, n_stored = sessions.assemble_history(session_id, member_id, _incoming(req))
+        summarize.maybe_schedule(session_id, member_id)   # T3：惰性异步压摘要，不阻塞本轮
+        tok_ctx = current_token.set(req.token or None)
+        ses_ctx = current_session.set(session_id)
+        mem_ctx = current_member.set(member_id)
+        try:
+            result = agent.invoke({"messages": sent},
+                                  config={"callbacks": [usage, toolcb]})
+        except NeedLoginError:
+            # 未登录：返回 401 + 跳转指令，前端据此跳登录页
+            outcome = "need_login"
+            return JSONResponse(status_code=401, content={
+                "need_login": True,
+                "message": "请先登录后再进行此操作",
+                "redirect": "/login",
+            })
+        except Exception as e:  # noqa: BLE001
+            # M4：不回原始异常文本（可能含内网地址/连接串/栈帧），原文只进日志
+            code, message = guard.classify_exception(e)
+            logger.exception("非流式对话失败 code=%s", code)
+            return JSONResponse(status_code=502, content={"error": message, "code": code})
+        reply = result["messages"][-1].content
+        # 写路径：只追加**本轮新增**的消息（含工具消息），保证下一轮「买第一款」能定位到商品 id
+        sessions.append_turn(session_id, _delta(result.get("messages") or [], n_stored), member_id)
+        # M1.5.4：达单会话上限才删最旧轮（且只删已被摘要覆盖的），不阻塞本轮
+        summarize.maybe_trim(session_id, member_id)
+        outcome = "ok"
+        return {"reply": reply}
     finally:
+        # 收尾统一记账：成功 / 拦截 / 异常都要留下指标与一条可检索的回合日志
         guard.record_usage(usage.total)               # M4：累加全站当日 token
-        current_token.reset(tok_ctx)
-        current_session.reset(ses_ctx)
-        current_member.reset(mem_ctx)
-    reply = result["messages"][-1].content
-    # 写路径：只追加**本轮新增**的消息（含工具消息），保证下一轮「买第一款」能定位到商品 id
-    sessions.append_turn(session_id, _delta(result.get("messages") or [], n_stored), member_id)
-    # M1.5.4：达单会话上限才删最旧轮（且只删已被摘要覆盖的），不阻塞本轮
-    summarize.maybe_trim(session_id, member_id)
-    return {"reply": reply}
+        dur = (time.perf_counter() - t0) * 1000
+        metrics.record_turn("http", outcome, dur, tools=toolcb.summary(),
+                            answer=reply if outcome == "ok" else None)
+        logger.info("turn end surface=http outcome=%s dur=%.0fms tokens=%d tools=%s",
+                    outcome, dur, usage.total, toolcb.describe(),
+                    extra={"surface": "http", "outcome": outcome,
+                           "durationMs": round(dur), "tokens": usage.total,
+                           "llmCalls": usage.calls, "tools": toolcb.describe()})
+        if tok_ctx is not None:
+            current_token.reset(tok_ctx)
+        if ses_ctx is not None:
+            current_session.reset(ses_ctx)
+        if mem_ctx is not None:
+            current_member.reset(mem_ctx)
+        trace.reset_session(trace_ses)
 
 
 @app.post("/api/chat/stream")
@@ -301,20 +351,49 @@ async def chat_stream(req: ChatRequest, request: Request):
 
     async def event_stream():
         session_id = req.session_id or "default"
+        trace_ses = trace.set_session(session_id)   # M4.3：后续日志带 sessionId
+        t0 = time.perf_counter()
         member_id = resolve_member_id(req.token)   # M1：会话/草稿归属绑定会员
+        usage = guard.TokenUsageCollector()        # M4：本轮 token 计量（含多次 LLM 调用）
+        toolcb = metrics.ToolUsageCollector()      # M4.3：本轮工具成功/失败
+        outcome, reply = "error", ""
+
+        def _finish(oc: str, ans: str | None = None) -> None:
+            """回合收尾：写指标 + 一条可检索日志 + 复位 trace。
+
+            所有出口（正常 / 拦截 / 异常）都走这里，避免"某条 return 忘了记账"
+            导致指标长期偏低——这类漏记很难在事后发现。
+            """
+            guard.record_usage(usage.total)        # M4：全站当日 token（失败轮也计）
+            dur = (time.perf_counter() - t0) * 1000
+            metrics.record_turn("sse", oc, dur, tools=toolcb.summary(), answer=ans)
+            logger.info("turn end surface=sse outcome=%s dur=%.0fms tokens=%d tools=%s",
+                        oc, dur, usage.total, toolcb.describe(),
+                        extra={"surface": "sse", "outcome": oc,
+                               "durationMs": round(dur), "tokens": usage.total,
+                               "llmCalls": usage.calls, "tools": toolcb.describe()})
+            trace.reset_session(trace_ses)
 
         # M4 治理门禁：超限回 error 事件（而不是断流）——前端已有 error 分支，
         # 零改动即可展示；code 字段留给将来做差异化 UI
         decision = guard.check(client_ip, member_id)
         if not decision.allowed:
+            logger.info("治理拦截 surface=sse code=%s", decision.code,
+                        extra={"surface": "sse", "code": decision.code})
             yield _sse("error", decision.as_event())
+            _finish("blocked")
             return
 
         try:
             agent = get_agent(degraded=decision.degraded)
         except RuntimeError as e:
             yield _sse("error", {"message": str(e), "code": "llm_unconfigured"})
+            _finish("error")
             return
+        if decision.degraded:
+            # 成本上限触发 → 本轮换轻量模型。不显式记一条，就只剩「回答怎么变差了」的体感
+            logger.info("成本上限触发，本轮降级模型 surface=sse",
+                        extra={"surface": "sse", "degraded": True})
         # 读路径：分级装配（可能被压缩），只读；n_stored 供写路径算"本轮新增"
         sent, n_stored = sessions.assemble_history(session_id, member_id, _incoming(req))
         summarize.maybe_schedule(session_id, member_id)   # T3：惰性异步压摘要，不阻塞本轮
@@ -323,7 +402,6 @@ async def chat_stream(req: ChatRequest, request: Request):
         tok_ctx = current_token.set(req.token or None)
         ses_ctx = current_session.set(session_id)
         mem_ctx = current_member.set(member_id)
-        usage = guard.TokenUsageCollector()          # M4：本轮 token 计量（含多次 LLM 调用）
         try:
             full_reply = ""
             # 本轮搜索累计的商品 id → 原始数据。卡片只展示 show_products 认可的商品，
@@ -337,7 +415,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             async for mode, chunk in agent.astream(
                     {"messages": sent},
                     stream_mode=["messages", "values"],
-                    config={"callbacks": [usage]},       # M4：计量本轮所有 LLM 调用
+                    config={"callbacks": [usage, toolcb]},   # M4 计量 token / M4.3 统计工具
             ):
                 if mode == "values":
                     final_state = chunk
@@ -452,8 +530,11 @@ async def chat_stream(req: ChatRequest, request: Request):
                                      member_id)
             # M1.5.4：达单会话上限才删最旧轮（且只删已被摘要覆盖的），不阻塞本轮
             summarize.maybe_trim(session_id, member_id)
+            reply = full_reply
+            outcome = "ok"
             yield _sse("done", {})
         except NeedLoginError:
+            outcome = "need_login"
             # 未登录：发 need_login 事件，前端收到后跳登录页（不是对话错误）
             # 不存历史——登录后用户重发该条消息即可，避免半截状态
             yield _sse("need_login", {
@@ -467,7 +548,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             logger.exception("流式对话失败 code=%s", code)
             yield _sse("error", {"message": message, "code": code})
         finally:
-            guard.record_usage(usage.total)          # M4：累加全站当日 token（失败轮也计）
+            _finish(outcome, reply if outcome == "ok" else None)
             current_token.reset(tok_ctx)
             current_session.reset(ses_ctx)
             current_member.reset(mem_ctx)

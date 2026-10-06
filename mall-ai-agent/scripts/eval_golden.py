@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app import config                             # noqa: E402
+from app.metrics import REFUSAL_HINTS as REFUSE_HINTS  # noqa: E402 —— 与生产指标同一份拒答词表
 from app.rag import retriever, vector_store        # noqa: E402
 
 GOLDEN = ROOT / "eval" / "golden_set.json"
@@ -47,11 +48,8 @@ NUM_RE = re.compile(r"\d+(?:\.\d{1,2})?")
 PRICE_FIELD_RE = re.compile(r'"price"\s*:\s*(\d+(?:\.\d+)?)')
 
 # 拒答话术 vs 通用知识兜底话术（§9.3 第 3 条：拒答不得改用常识瞎编）
-REFUSE_HINTS = [
-    "没有找到", "没有相关", "暂无相关", "无法回答", "不太了解", "不太清楚",
-    "帮不上", "没有足够", "查不到", "查不了", "无法查", "暂时没有",
-    "我这边没有", "无法提供", "没有这方面", "不清楚", "抱歉", "不好意思",
-]
+# ⚠️ REFUSE_HINTS 不在此定义：改为 import app.metrics.REFUSAL_HINTS，
+# 让「金标集判定」与「生产拒答率指标」共用同一份词表，避免两套口径漂移。
 FALLBACK_WORDS = [
     "一般来说", "一般来讲", "通常来说", "通常情况下", "市面上",
     "普遍认为", "据我所知", "一般市面上", "一般情况",

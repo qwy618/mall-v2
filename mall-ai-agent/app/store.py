@@ -704,3 +704,70 @@ def _as_int(v) -> int:
         return int(v) if v is not None else 0
     except (TypeError, ValueError):
         return 0
+
+
+# ---------------------------------------------------------------- 指标（M4.3）
+
+# 延迟桶上界（毫秒）。放这里而不是 metrics.py，是为了让「写」的一侧（本模块）
+# 与「读」的一侧（snapshot 的百分位计算）共用同一份定义，避免两边桶边界漂移。
+LATENCY_BUCKETS_MS = (500, 1000, 2000, 5000, 10000, 20000, 30000, 60000)
+
+# 指标键按天分桶，TTL 7 天。长期趋势该进时序库（Prometheus/Langfuse M4.5），
+# Redis 只留「回看这一周」的窗口；过期即自动回收，无需清理任务。
+_METRIC_TTL = 7 * 86400
+
+
+def metric_day(day: str | None = None) -> str:
+    return day or time.strftime("%Y%m%d")
+
+
+def _k_metric(kind: str, day: str) -> str:
+    return f"ai:metrics:{kind}:{day}"
+
+
+def metric_incr_many(counters: dict, day: str | None = None) -> None:
+    """把一批 (field, delta) 计数写进当日 Hash —— 一次 pipeline、一次往返。
+
+    ⚠️ TTL 用 `EXPIRE` 每次重设：Hash 是"当天一直写"的容器，与限流键
+    （首次设 TTL、避免被动续期）语义不同 —— 这里续期无副作用，且能保证
+    次日零点后旧键在 7 天内稳定回收。
+    """
+    pairs = {f: int(n) for f, n in (counters or {}).items() if n}
+    if not pairs:
+        return
+    d = metric_day(day)
+    key = _k_metric("c", d)
+    pipe = client().pipeline()
+    for field, n in pairs.items():
+        pipe.hincrby(key, field, n)
+    pipe.expire(key, _METRIC_TTL)
+    pipe.execute()
+
+
+def metric_latency(ms: float, day: str | None = None) -> None:
+    """累加一次延迟样本：命中桶 + sum + count，一把 pipeline 完成。"""
+    d = metric_day(day)
+    ms_int = max(0, int(round(ms)))
+    bucket = next((b for b in LATENCY_BUCKETS_MS if ms_int <= b), LATENCY_BUCKETS_MS[-1])
+    key = _k_metric("l", d)
+    pipe = client().pipeline()
+    pipe.hincrby(key, f"le_{bucket}", 1)
+    pipe.hincrby(key, "sum", ms_int)
+    pipe.hincrby(key, "count", 1)
+    pipe.expire(key, _METRIC_TTL)
+    pipe.execute()
+
+
+def metric_dump(day: str | None = None) -> tuple[dict, dict]:
+    """读当日 (counters, latency)；键不存在时返回两个空字典。"""
+    d = metric_day(day)
+    c = client()
+    raw_c = c.hgetall(_k_metric("c", d)) or {}
+    raw_l = c.hgetall(_k_metric("l", d)) or {}
+    return ({k: _as_int(v) for k, v in raw_c.items()},
+            {k: _as_int(v) for k, v in raw_l.items()})
+
+
+def metric_clear(day: str) -> int:
+    """删除某日的指标键，返回删除数量。验收脚本隔离测试用 / 运维重置用。"""
+    return int(client().delete(_k_metric("c", day), _k_metric("l", day)))
