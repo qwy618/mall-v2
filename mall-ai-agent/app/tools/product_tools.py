@@ -6,8 +6,9 @@ LLM 越知道什么时候该调它、参数怎么填、返回什么字段。
 接口口径（mall-v2）：
 - 列表 `GET /product/list`：keyword/categoryId/brandId/pageNum(从 1)/pageSize。
   有 keyword 时后端走 ES（失败自动降级 DB LIKE）；无 keyword 时是分类/品牌浏览。
-- 详情 `GET /product/{id}`：返回 `{product: ProductVO, skus: [Sku]}`。
-  **mall-v2 没有属性表**，因此没有参数列表（productAttributeList）。
+- 详情 `GET /product/{id}`：返回 `{product: ProductVO, attributes: [...], specOptions: [...], skus: [Sku]}`。
+  `attributes` 是商品参数（商品级、仅展示），`specOptions` 是规格可选值分组；
+  `skus` 里带 `spData`（规格 JSON）。**价格/库存只认 skus**，参数只认 attributes。
 """
 import json
 
@@ -84,16 +85,28 @@ def show_products(product_ids: str) -> str:
 def get_product_detail(product_id: int) -> str:
     """查询单个商品的详情，返回详情 JSON 字符串。
 
-    使用场景：用户已锁定某个商品，想进一步了解规格、价格、库存。
+    使用场景：用户已锁定某个商品，想进一步了解规格、价格、库存、商品参数。
     参数 product_id 必须是 search_products / 商品卡片返回的 id 字段值。
-    返回结构：{"product": {...}, "skus": [ {...}, ... ]}。
+    返回结构：{"product": {...}, "attributes": [...], "skus": [ {...}, ... ]}。
     - product：商品基本信息，含 id、name、pic（主图）、price（SKU 最低价）
+    - attributes：**商品参数**列表（商品级、所有规格共用、不影响价格与库存），
+      每项形如 {"name":"屏幕尺寸","value":"6.1英寸"}。用户问「屏幕多大」「什么处理器」
+      「什么材质」「电池多大」这类问题时，答案只能取自这里。
+      若为空数组或没有用户问的那一项，如实说该商品暂无这项参数信息，
+      **严禁凭对该型号的常识自行补全**。
     - skus：可选规格列表，每个 SKU 含 id（下单/加购要用它）、skuCode、spData（规格 JSON，
       展示用）、price（单价）、stock（库存）、pic（可为空，为空时展示商品主图）
-    注意：mall-v2 暂无商品参数表，返回里没有属性列表，不要向用户承诺参数级细节。
+    价格与库存一律以 skus 为准；attributes 只用于回答参数类问题，不得用来推算价格或库存。
     """
     data = mall_client.api_get(config.PORTAL_BASE_URL, f"/product/{product_id}")
     vo = data.get("data") or {}
     product = normalize_product(vo.get("product"))
     skus = vo.get("skus") or []
-    return json.dumps({"product": product, "skus": skus}, ensure_ascii=False)
+    # 债务1 落地后 portal 详情多了 attributes（商品参数）。只取 name/value：
+    # attributeId 对 LLM 没用，带上反而多耗 token。老商品没配参数时是空数组。
+    attributes = [
+        {"name": a.get("name") or "", "value": a.get("value") or ""}
+        for a in (vo.get("attributes") or [])
+        if a and a.get("name")
+    ]
+    return json.dumps({"product": product, "attributes": attributes, "skus": skus}, ensure_ascii=False)
