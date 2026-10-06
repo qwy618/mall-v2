@@ -170,6 +170,12 @@
             </div>
 
             <p class="sec-label">选择规格<i>共 {{ detail.skus.length }} 个规格</i></p>
+            <!-- 可选规格一览：让用户先看清有哪几个颜色/容量，再去下面点具体 SKU -->
+            <div v-if="specOptionList.length" class="spec-hint">
+              <span v-for="o in specOptionList" :key="o.attributeId" class="spec-hint__item">
+                <b>{{ o.name }}</b>{{ o.values.join(' / ') }}
+              </span>
+            </div>
             <div class="sku-list">
               <div
                 v-for="s in detail.skus"
@@ -209,6 +215,19 @@
           <!-- 放大预览浮层：hover 时浮于右栏信息之上 -->
           <div class="zoom__result" v-show="zoomShow && detail.product.pic" :style="previewStyle"></div>
         </div>
+
+        <!-- 规格参数（债务1）：商品级、仅展示，不影响价格与库存。
+             债务1 之前这类信息（屏幕尺寸/处理器/材质）无处可放，只能硬塞进副标题。
+             后端没配参数时返回空数组，整块不渲染 —— 老商品不会因此报错。 -->
+        <template v-if="paramList.length">
+          <el-divider>规格参数</el-divider>
+          <ul class="params">
+            <li v-for="a in paramList" :key="a.attributeId">
+              <span class="params__name">{{ a.name }}</span>
+              <span class="params__value">{{ a.value }}</span>
+            </li>
+          </ul>
+        </template>
 
         <el-divider>用户评价</el-divider>
         <div class="reviews" v-loading="commentsLoading">
@@ -427,6 +446,10 @@ function onZoomMove(e: MouseEvent) {
   }
 }
 const totalStock = computed(() => (detail.value?.skus || []).reduce((sum, s) => sum + (s.stock || 0), 0))
+// 商品参数（type=1，商品级、仅展示）。后端返回空数组时整块不渲染
+const paramList = computed(() => detail.value?.attributes || [])
+// 规格可选值分组（颜色/容量各有哪些值），供「选规格」上方一览
+const specOptionList = computed(() => detail.value?.specOptions || [])
 const pickedSpecText = computed(() => {
   const s = detail.value?.skus?.find((x) => x.id === selectedSkuId.value)
   if (!s) return ''
@@ -1247,6 +1270,48 @@ watch(
   color: var(--mall-text-light);
   margin-left: auto;
 }
+/* 可选规格一览：先让用户看清有哪几个颜色/容量，再去下面点具体 SKU */
+.spec-hint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--mall-text-regular);
+}
+.spec-hint__item b {
+  margin-right: 4px;
+  font-weight: 400;
+  color: var(--mall-text-light);
+}
+
+/* 规格参数（债务1）：商品级、仅展示，双列铺开 */
+.params {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.params li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.params__name {
+  flex: 0 0 76px;
+  color: var(--mall-text-light);
+}
+.params__value {
+  flex: 1;
+  color: var(--mall-text);
+  word-break: break-all;
+}
+
 .sku-list {
   display: flex;
   flex-direction: column;
