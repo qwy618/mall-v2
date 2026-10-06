@@ -138,7 +138,9 @@
         </div>
         <el-table :data="skuList" v-loading="skuLoading" border size="small">
           <el-table-column prop="skuCode" label="SKU 编码" width="160" />
-          <el-table-column prop="spData" label="规格" show-overflow-tooltip />
+          <el-table-column label="规格" show-overflow-tooltip>
+            <template #default="{ row }">{{ specText(row.spData) }}</template>
+          </el-table-column>
           <el-table-column prop="price" label="价格" width="100" />
           <el-table-column prop="stock" label="库存" width="80" />
           <el-table-column prop="lockStock" label="锁定" width="80" />
@@ -150,6 +152,23 @@
             </template>
           </el-table-column>
         </el-table>
+      </div>
+
+      <!-- 规格参数（type=1，商品级、仅展示）：填值后随商品的「确定」一起保存 -->
+      <el-divider v-if="dialogMode === 'edit'">规格参数</el-divider>
+      <div v-if="dialogMode === 'edit'">
+        <el-form label-width="90px">
+          <el-form-item v-for="a in paramAttrs" :key="a.id" :label="a.name">
+            <el-input v-model="paramValues[a.id]" :placeholder="`请输入${a.name}`" />
+          </el-form-item>
+        </el-form>
+        <el-alert
+            v-if="!paramAttrs.length"
+            type="info"
+            :closable="false"
+            show-icon
+            title="该分类还没有参数属性。参数只作展示（如 屏幕尺寸 / 处理器），请先到「商品属性」添加。"
+        />
       </div>
 
       <template #footer>
@@ -165,8 +184,30 @@
         width="520px"
     >
       <el-form ref="skuFormRef" :model="skuForm" :rules="skuRules" label-width="90px">
-        <el-form-item label="规格" prop="spData">
-          <el-input v-model="skuForm.spData" type="textarea" :rows="2" placeholder="规格 JSON，可空" />
+        <!-- 规格：按该商品所属分类的属性定义逐项选值，不再手敲 JSON（债务1）。
+             提交时由 buildSpData() 拼回 sp_data —— sp_data 仍是真源，后端再从它同步派生索引。 -->
+        <el-form-item label="规格">
+          <div class="spec-rows">
+            <div v-for="a in specAttrs" :key="a.id" class="spec-row">
+              <span class="spec-row__name">{{ a.name }}</span>
+              <el-select
+                  v-if="a.inputType === 1"
+                  v-model="specValues[a.id]"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  placeholder="选择，或输入新值"
+                  style="flex: 1"
+              >
+                <el-option v-for="v in optionsOf(a)" :key="v" :label="v" :value="v" />
+              </el-select>
+              <el-input v-else v-model="specValues[a.id]" placeholder="请输入" style="flex: 1" />
+            </div>
+            <div v-if="!specAttrs.length" class="spec-empty">
+              该分类还没有规格属性，请先到「商品属性」添加（如：颜色、容量）
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="价格" prop="price">
           <el-input-number v-model="skuForm.price" :min="0.01" :precision="2" :step="0.01" style="width: 100%" />
@@ -223,6 +264,12 @@ import {
   updateSku,
   deleteSku,
 } from '@/apis/sku'
+import {
+  getProductParams,
+  listAttributeByProduct,
+  saveProductParams,
+} from '@/apis/attribute'
+import type { AttributeItem, ProductAttribute } from '@/types/attribute'
 import { listBrand } from '@/apis/brand'
 import { listCategory } from '@/apis/category'
 import type { Product, ProductParam } from '@/types/product'
@@ -301,6 +348,16 @@ const skuRules: FormRules<SkuParam> = {
   price: [{ required: true, type: 'number', min: 0.01, message: '价格必须大于 0', trigger: 'blur' }],
 }
 
+// ==================== 属性（债务1） ====================
+/** 当前商品所属分类下的「规格」属性定义（type=0）：SKU 表单按它逐项选值 */
+const specAttrs = ref<ProductAttribute[]>([])
+/** attributeId -> 该 SKU 在这个规格上的取值；提交时由 buildSpData() 拼回 sp_data */
+const specValues = ref<Record<number, string>>({})
+/** 当前商品所属分类下的「参数」属性定义（type=1）：商品级、仅展示 */
+const paramAttrs = ref<ProductAttribute[]>([])
+/** attributeId -> 该商品在这个参数上的值 */
+const paramValues = ref<Record<number, string>>({})
+
 // ==================== 加载数据 ====================
 async function loadData() {
   loading.value = true
@@ -365,6 +422,103 @@ async function loadSkuList() {
     console.error('加载 SKU 列表失败:', error)
   } finally {
     skuLoading.value = false
+  }
+}
+
+// ==================== 属性（债务1） ====================
+/** 加载该商品所属分类下的属性定义：规格(type=0) 给 SKU 表单，参数(type=1) 给商品参数表单 */
+async function loadAttributeDefs() {
+  if (!editId.value) return
+  try {
+    const [specs, params] = await Promise.all([
+      listAttributeByProduct(editId.value, 0),
+      listAttributeByProduct(editId.value, 1),
+    ])
+    specAttrs.value = specs
+    paramAttrs.value = params
+  } catch (error) {
+    console.error('加载属性定义失败:', error)
+  }
+}
+
+/** 加载该商品已填的参数值，回填到 paramValues */
+async function loadProductParams() {
+  if (!editId.value) return
+  try {
+    const items = await getProductParams(editId.value)
+    const map: Record<number, string> = {}
+    for (const it of items) map[it.attributeId] = it.value
+    paramValues.value = map
+  } catch (error) {
+    console.error('加载商品参数失败:', error)
+  }
+}
+
+/** 参数表单 → 提交数组（空值不提交；后端本身也是先清后插） */
+function collectParamItems(): AttributeItem[] {
+  return paramAttrs.value
+    .map((a) => ({ attributeId: a.id, value: (paramValues.value[a.id] || '').trim() }))
+    .filter((it) => it.value !== '')
+}
+
+/** 候选值字符串（逗号分隔）→ 下拉选项 */
+function optionsOf(attr: ProductAttribute): string[] {
+  return (attr.inputList || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+}
+
+/** specValues → sp_data JSON 文本；一项都没填返回空串（表示该 SKU 无规格） */
+function buildSpData(): string {
+  const items = specAttrs.value
+    .map((a) => ({ key: a.name, value: (specValues.value[a.id] || '').trim() }))
+    .filter((it) => it.value !== '')
+  return items.length ? JSON.stringify(items) : ''
+}
+
+/** 把已有 sp_data 回填进 specValues。按「属性名」匹配定义（sp_data 里存的就是属性名） */
+function fillSpecValues(spData?: string) {
+  const map: Record<number, string> = {}
+  if (spData) {
+    try {
+      const arr = JSON.parse(spData)
+      if (Array.isArray(arr)) {
+        for (const it of arr) {
+          const key = it?.key ?? it?.name
+          const value = it?.value ?? it?.val
+          if (!key || !value) continue
+          const attr = specAttrs.value.find((a) => a.name === key)
+          if (attr) map[attr.id] = String(value)
+        }
+      }
+    } catch {
+      // 历史脏数据（非法 JSON）：当作没填，让运营重新选一遍，而不是把原文塞回输入框
+    }
+  }
+  specValues.value = map
+}
+
+/**
+ * 表格展示用：sp_data → 「颜色:黑色  容量:256G」。**仅供展示**。
+ * 业务口径的规格格式化以 portal-web/src/utils/spec.ts 为准
+ * （两个应用不共享代码，故这里只做最小实现）。
+ */
+function specText(spData?: string): string {
+  if (!spData) return ''
+  try {
+    const arr = JSON.parse(spData)
+    if (!Array.isArray(arr)) return spData
+    return arr
+      .map((it) =>
+        it && typeof it === 'object'
+          ? `${it.key ?? it.name ?? ''}:${it.value ?? it.val ?? ''}`
+          : String(it)
+      )
+      .filter((s) => s !== ':')
+      .join('  ')
+  } catch {
+    return spData
   }
 }
 
@@ -437,8 +591,10 @@ async function openEdit(row: Product) {
     form.brandId = data.brandId
     form.categoryId = data.categoryId
     form.status = data.status
+    // 属性定义必须先就位：SKU 表单按它渲染规格项，参数表单按它渲染输入框
+    await loadAttributeDefs()
     dialogVisible.value = true
-    await loadSkuList()
+    await Promise.all([loadSkuList(), loadProductParams()])
   } catch (error) {
     console.error('加载商品详情失败:', error)
   }
@@ -455,6 +611,8 @@ async function submitForm() {
         ElMessage.success(`新增成功，ID=${id}`)
       } else {
         const affected = await updateProduct(editId.value!, { ...form })
+        // 参数（type=1）随商品一起保存：后端先清后插，空值项不提交
+        await saveProductParams(editId.value!, collectParamItems())
         ElMessage.success(`修改成功，影响 ${affected} 行`)
       }
       dialogVisible.value = false
@@ -497,6 +655,7 @@ function openSkuCreate() {
   skuForm.lockStock = 0
   skuForm.pic = ''
   skuForm.sale = 0
+  specValues.value = {}            // 规格项清空
   skuDialogVisible.value = true
 }
 
@@ -510,6 +669,7 @@ function openSkuEdit(sku: Sku) {
   skuForm.lockStock = sku.lockStock
   skuForm.pic = sku.pic || ''
   skuForm.sale = sku.sale
+  fillSpecValues(sku.spData)       // 已有规格回填到下拉，而不是让运营重敲
   skuDialogVisible.value = true
 }
 
@@ -519,6 +679,8 @@ async function submitSku() {
     if (!valid) return
     skuSubmitting.value = true
     try {
+      // 下拉选值 → sp_data（真源）；后端再据它同步 sku_attribute_value 派生索引
+      skuForm.spData = buildSpData()
       if (skuDialogMode.value === 'create') {
         const id = await createSku({ ...skuForm })
         ElMessage.success(`SKU 新增成功，ID=${id}`)
@@ -528,6 +690,8 @@ async function submitSku() {
       }
       skuDialogVisible.value = false
       await loadSkuList()
+      // 运营可能在下拉里直接输入了新值，后端会把它追加进候选值清单 → 重拉定义保持一致
+      await loadAttributeDefs()
     } catch (error) {
       console.error('提交 SKU 失败:', error)
     } finally {
@@ -577,6 +741,28 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+/* SKU 表单的规格项：属性名 + 选值控件（替代原先手敲 JSON 的 textarea） */
+.spec-rows {
+  width: 100%;
+}
+.spec-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.spec-row + .spec-row {
+  margin-top: 8px;
+}
+.spec-row__name {
+  flex: 0 0 64px;
+  color: var(--admin-text-light);
+  font-size: 13px;
+}
+.spec-empty {
+  color: var(--admin-text-light);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .upload-row {
   display: flex;
