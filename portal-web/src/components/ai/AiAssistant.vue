@@ -70,8 +70,68 @@ function uid(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-/** 快捷问题：降低冷启动门槛（都是助手能力覆盖范围内的问题） */
-const QUICK = ['找一款降噪耳机', '我购物车里有什么', '帮我推荐一下', '500 元以内有什么好看的杯子']
+/**
+ * 快捷问题池：降低冷启动门槛，每条都落在助手真实具备的能力里。
+ * 每次随机抽一批、且优先与上一批不重复 —— 固定一套会让人以为「只会这几句」。
+ *
+ * 两条硬约束（都踩过）：
+ *  ① **必须指向真实存在的商品**：之前写「找一款降噪耳机」「500 元以内的杯子」，
+ *     而库里根本没有耳机/杯子类目，点了只会得到「没找到」——建议必须先在工具层验过有货。
+ *  ② 分两组：购物车/个性化推荐类会走登录判定，游客点了会被拦。空态卡片是第一印象，
+ *     主体给免登录能答的（搜商品/口碑问答），每批只埋 1~2 条需登录的做能力引导。
+ * 池内每条都控制在 8 个汉字以内，一行放得下、不会被裁掉半截。
+ */
+const QUICK_GUEST = [
+  '推荐一款手机',
+  '华为手机口碑怎么样',
+  '小米手机口碑好吗',
+  '有什么好的平板',
+  '推荐一款轻薄笔记本',
+  '笔记本续航怎么样',
+  '想买台大屏电视',
+  '固态硬盘怎么挑',
+  '推荐一件纯色T恤',
+  '运动鞋推荐',
+  '想给家里换热水器',
+  'iPhone 14 怎么样',
+]
+const QUICK_MEMBER = [
+  '我购物车里有什么',
+  '帮我推荐一下',
+  '猜猜我喜欢什么',
+  '购物车一共多少钱',
+  '按我的喜好推荐',
+  '帮我看看购物车',
+]
+
+const quickCards = ref<string[]>([])
+const quickChips = ref<string[]>([])
+let lastQuick: string[] = []
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+/** 从池里抽 n 条：优先抽上一批没出现过的；池子不够了才允许重复（否则会抽不满） */
+function pickFrom(pool: string[], n: number): string[] {
+  const fresh = pool.filter((q) => !lastQuick.includes(q))
+  return shuffle(fresh.length >= n ? fresh : pool).slice(0, n)
+}
+
+/** 换一批建议：空态卡片 3 免登录 + 1 需登录，底部 chips 2 免登录 + 1 需登录 */
+function refreshQuick() {
+  const guest = pickFrom(QUICK_GUEST, 5)
+  const member = pickFrom(QUICK_MEMBER, 2)
+  lastQuick = [...guest, ...member]
+  quickCards.value = shuffle([guest[0], guest[1], guest[2], member[0]])
+  quickChips.value = [guest[3], guest[4], member[1]]
+}
+refreshQuick()
 
 function toggle() {
   open.value = !open.value
@@ -87,6 +147,11 @@ watch(
   () => msgs.value.map((m) => m.parts.length + (m.streaming ? 0.5 : 0)).join(','),
   () => nextTick(scrollBottom),
 )
+
+/** 每次展开面板都换一批建议：反复打开看到同一套，会显得像写死的假按钮 */
+watch(open, (v) => {
+  if (v) refreshQuick()
+})
 
 /** 追加文本：续到最后一个 text 片段，保证流式增量拼成一段 */
 function appendText(msg: AiMsg, text: string) {
@@ -164,6 +229,8 @@ async function send(text?: string, opts: { asSystem?: boolean; silent?: boolean 
 
   if (!opts.silent) {
     msgs.value.push({ id: uid(), role: 'user', parts: [{ kind: 'text', text: content }] })
+    // 问完一句就换一批建议：下一轮看到的是别的问题，而不是老四样
+    refreshQuick()
   }
   draft.value = ''
   resetInput()
@@ -301,7 +368,7 @@ onBeforeUnmount(() => ctrl?.abort())
             <p class="ai__hello">你好，我是小 M</p>
             <p class="ai__hello-sub">帮你挑商品、加入购物车，也能直接下单。<br />试试下面这些：</p>
             <div class="ai__cards">
-              <button v-for="q in QUICK" :key="q" class="ai__card" type="button" @click="onQuick(q)">
+              <button v-for="q in quickCards" :key="q" class="ai__card" type="button" @click="onQuick(q)">
                 <span>{{ q }}</span>
                 <el-icon class="ai__card-go" :size="13"><ArrowRight /></el-icon>
               </button>
@@ -321,9 +388,9 @@ onBeforeUnmount(() => ctrl?.abort())
         </div>
 
         <footer class="ai__foot">
-          <!-- 快捷问题常驻：有对话后仍能一键追问，不用自己想措辞 -->
+          <!-- 快捷问题常驻：有对话后仍能一键追问，不用自己想措辞；每次问完自动换一批 -->
           <div v-if="msgs.length > 0" class="ai__chips">
-            <button v-for="q in QUICK" :key="q" type="button" @click="onQuick(q)">{{ q }}</button>
+            <button v-for="q in quickChips" :key="q" type="button" @click="onQuick(q)">{{ q }}</button>
           </div>
 
           <div class="ai__composer">
@@ -554,19 +621,20 @@ onBeforeUnmount(() => ctrl?.abort())
   border-top: 1px solid var(--mall-border);
 }
 
-/* 常驻快捷问题：多了就横向滑 */
+/*
+ * 常驻快捷问题：**换行而不是横向滚动** —— 之前用 overflow-x 隐藏滚动条，
+ * 第 4 条只露出半截且没有任何可滑的暗示，看起来就像被裁坏了。
+ * 现在每条 ≤8 个汉字 + 收窄内边距，一行正好放下 3 条；万一还是放不下就换行，绝不裁字。
+ */
 .ai__chips {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  overflow-x: auto;
   padding-bottom: 8px;
-  scrollbar-width: none;
-}
-.ai__chips::-webkit-scrollbar {
-  display: none;
 }
 .ai__chips button {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  max-width: 100%;
   white-space: nowrap;
   font-size: 12px;
   font-family: inherit;
@@ -574,7 +642,7 @@ onBeforeUnmount(() => ctrl?.abort())
   background: var(--mall-bg);
   border: 1px solid var(--mall-border);
   border-radius: 999px;
-  padding: 5px 11px;
+  padding: 5px 10px;
   cursor: pointer;
   transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
 }
