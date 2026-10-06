@@ -22,7 +22,9 @@
         </template>
       </el-table-column>
       <el-table-column prop="sort" label="排序" width="80" />
-      <el-table-column prop="createTime" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatDateTime(row.createTime) }}</template>
+      </el-table-column>
       <!-- 操作列：详情 / 编辑 / 删除 -->
       <el-table-column label="操作" width="200">
         <template #default="{ row }">
@@ -55,8 +57,8 @@
           <el-image :src="detailData.logo" fit="contain" style="width: 80px; height: 80px" />
         </el-descriptions-item>
         <el-descriptions-item label="排序">{{ detailData.sort }}</el-descriptions-item>
-        <el-descriptions-item label="创建时间">{{ detailData.createTime }}</el-descriptions-item>
-        <el-descriptions-item label="更新时间">{{ detailData.updateTime }}</el-descriptions-item>
+        <el-descriptions-item label="创建时间">{{ formatDateTime(detailData.createTime) }}</el-descriptions-item>
+        <el-descriptions-item label="更新时间">{{ formatDateTime(detailData.updateTime) }}</el-descriptions-item>
       </el-descriptions>
     </el-dialog>
 
@@ -94,6 +96,7 @@ import {
   deleteBrand,
 } from '@/apis/brand'
 import type { Brand, BrandParam } from '@/types/brand'
+import { formatDateTime } from '@/utils/format'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 // ==================== 列表状态 ====================

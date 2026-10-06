@@ -51,7 +51,9 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="createTime" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatDateTime(row.createTime) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="180">
         <template #default="{ row }">
           <el-button size="small" link @click="openDetail(row.id)">详情</el-button>
@@ -86,8 +88,8 @@
           <span v-else>—</span>
         </el-descriptions-item>
         <el-descriptions-item label="显示状态">{{ detailData.showStatus === 1 ? '显示' : '隐藏' }}</el-descriptions-item>
-        <el-descriptions-item label="创建时间">{{ detailData.createTime }}</el-descriptions-item>
-        <el-descriptions-item label="更新时间">{{ detailData.updateTime }}</el-descriptions-item>
+        <el-descriptions-item label="创建时间">{{ formatDateTime(detailData.createTime) }}</el-descriptions-item>
+        <el-descriptions-item label="更新时间">{{ formatDateTime(detailData.updateTime) }}</el-descriptions-item>
       </el-descriptions>
     </el-dialog>
 
@@ -134,6 +136,7 @@ import {
   deleteCategory,
 } from '@/apis/category'
 import type { Category, CategoryParam } from '@/types/category'
+import { formatDateTime } from '@/utils/format'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 // ==================== 列表状态 ====================

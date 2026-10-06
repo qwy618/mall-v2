@@ -269,6 +269,7 @@ import type { Coupon, CouponParam, CouponHistory } from '@/types/coupon'
 import { COUPON_USE_TYPE_TEXT, COUPON_HISTORY_STATUS_TEXT } from '@/types/coupon'
 import { listCategory } from '@/apis/category'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { formatDateTime } from '@/utils/format'
 
 // ==================== 列表状态 ====================
 const list = ref<Coupon[]>([])
@@ -356,9 +357,6 @@ function historyStatusTagType(status: number): 'success' | 'warning' | 'info' {
 }
 function amountText(amount?: number): string {
   return amount != null ? `¥${Number(amount).toFixed(2)}` : '-'
-}
-function formatDateTime(s?: string): string {
-  return s ? s.replace('T', ' ') : '-'
 }
 function formatRange(start?: string, end?: string): string {
   if (!start && !end) return '长期有效'

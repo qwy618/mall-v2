@@ -54,7 +54,9 @@
       <el-table-column label="运费" width="90">
         <template #default="{ row }">¥{{ formatMoney(row.freightAmount) }}</template>
       </el-table-column>
-      <el-table-column prop="createTime" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatDateTime(row.createTime) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="310" fixed="right">
         <template #default="{ row }">
           <el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button>
@@ -112,10 +114,10 @@
           <el-descriptions-item label="物流" v-if="detail.order.deliveryCompany">
             {{ detail.order.deliveryCompany }} / {{ detail.order.deliverySn }}
           </el-descriptions-item>
-          <el-descriptions-item label="创建时间">{{ detail.order.createTime }}</el-descriptions-item>
-          <el-descriptions-item label="支付时间" v-if="detail.order.paymentTime">{{ detail.order.paymentTime }}</el-descriptions-item>
-          <el-descriptions-item label="发货时间" v-if="detail.order.deliveryTime">{{ detail.order.deliveryTime }}</el-descriptions-item>
-          <el-descriptions-item label="完成时间" v-if="detail.order.receiveTime">{{ detail.order.receiveTime }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ formatDateTime(detail.order.createTime) }}</el-descriptions-item>
+          <el-descriptions-item label="支付时间" v-if="detail.order.paymentTime">{{ formatDateTime(detail.order.paymentTime) }}</el-descriptions-item>
+          <el-descriptions-item label="发货时间" v-if="detail.order.deliveryTime">{{ formatDateTime(detail.order.deliveryTime) }}</el-descriptions-item>
+          <el-descriptions-item label="完成时间" v-if="detail.order.receiveTime">{{ formatDateTime(detail.order.receiveTime) }}</el-descriptions-item>
         </el-descriptions>
 
         <el-divider>订单项</el-divider>
@@ -193,6 +195,7 @@ import {
   invalidateOrder,
 } from '@/apis/order'
 import { onAdminWsMessage } from '@/utils/adminWs'
+import { formatDateTime } from '@/utils/format'
 import {
   ORDER_STATUS_TEXT,
   ORDER_STATUS_TAG,

@@ -165,6 +165,7 @@ import { ref } from 'vue'
 import { listComments, auditComment, replyComment, deleteComment } from '@/apis/comment'
 import { COMMENT_STATUS_TEXT, commentPics, type CommentListItem } from '@/types/comment'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { formatDateTime } from '@/utils/format'
 
 const list = ref<CommentListItem[]>([])
 const total = ref(0)
@@ -188,9 +189,8 @@ function statusTagType(status: number): 'warning' | 'success' | 'info' | 'danger
   if (status === 2) return 'danger'
   return 'info'
 }
-function fmtTime(t?: string) {
-  return t ? t.replace('T', ' ').slice(0, 19) : '-'
-}
+// 时间展示统一走 @/utils/format，避免各页各自实现导致格式不一致
+const fmtTime = formatDateTime
 
 async function loadData() {
   loading.value = true

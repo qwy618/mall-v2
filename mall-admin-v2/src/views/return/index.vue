@@ -38,7 +38,9 @@
           <el-tag :type="RETURN_STATUS_TAG[row.status]">{{ RETURN_STATUS_TEXT[row.status] }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="createTime" label="申请时间" min-width="180" />
+      <el-table-column label="申请时间" min-width="180">
+        <template #default="{ row }">{{ formatDateTime(row.createTime) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
           <el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button>
@@ -76,7 +78,7 @@
           <el-descriptions-item v-if="detail.handleNote" label="处理备注">{{ detail.handleNote }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.companyAddress" label="退货地址">{{ detail.companyAddress }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.returnTrackingNo" label="退货物流单号">{{ detail.returnTrackingNo }}</el-descriptions-item>
-          <el-descriptions-item label="申请时间">{{ detail.createTime || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="申请时间">{{ formatDateTime(detail.createTime) }}</el-descriptions-item>
         </el-descriptions>
 
         <el-divider>退货商品</el-divider>
@@ -186,6 +188,7 @@ import {
   completeReturn,
 } from '@/apis/return'
 import { RETURN_STATUS_TEXT, RETURN_STATUS_TAG, type ReturnApplyEntity, type ReturnItemDTO } from '@/types/return'
+import { formatDateTime } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
