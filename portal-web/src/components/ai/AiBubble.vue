@@ -3,10 +3,12 @@
  * 一条对话消息：把 SSE 事件按到达顺序拼装的 parts 依次渲染。
  * 助手回复按顺序可能是「工具状态 → 商品卡 → 文字 → 确认卡」，顺序必须保真。
  */
+import { computed } from 'vue'
 import AiProductCard from './AiProductCard.vue'
 import AiConfirmCard from './AiConfirmCard.vue'
+import AiCitationCard from './AiCitationCard.vue'
 import PicBox from '@/components/PicBox.vue'
-import type { AiConfirm, AiMsg, AiProduct } from '@/types/ai'
+import type { AiCitation, AiConfirm, AiMsg, AiProduct } from '@/types/ai'
 
 const props = defineProps<{
   msg: AiMsg
@@ -18,6 +20,7 @@ const emit = defineEmits<{
   (e: 'confirm', data: AiConfirm): void
   (e: 'cancel', data: AiConfirm): void
   (e: 'pick', item: AiProduct): void
+  (e: 'cite', item: AiCitation): void
 }>()
 
 /** 工具名 → 面向用户的状态文案（禁术语、禁英文） */
@@ -30,6 +33,7 @@ const TOOL_LABEL: Record<string, string> = {
   preview_order: '正在核算订单金额',
   place_order: '正在为您下单',
   recommend_for_me: '正在为您找相似好物',
+  search_knowledge: '正在查看商品口碑',
 }
 
 function toolLabel(name: string): string {
@@ -47,6 +51,23 @@ function confirmStateOf(draftId: string): 'pending' | 'confirmed' | 'done' | 'ca
 /** 只有最后一条助手消息且仍在流式时显示光标 */
 const showCursor = () => props.msg.role === 'assistant' && props.msg.streaming === true
 
+/**
+ * 「工具状态」是进行中的瞬时提示，不是对话内容，不能永久留在气泡里。
+ *
+ * 后端只在工具**发起时**发一次 tool 事件、从不发结束事件（见 mall-ai-agent/app/main.py），
+ * 所以收尾信号只能由前端推断：工具还在跑 ⇔ 它是当前最后一段、且本轮仍在流式。
+ * 一旦后面来了新内容（文字 / 商品卡 / 确认卡 / 下一个工具），就说明这个工具已经结束，
+ * 必须收起 —— 否则会出现「已经回复了『没有找到商品』，头上却还挂着『正在搜索商品…』」的假进行中。
+ */
+const visibleParts = computed(() =>
+  props.msg.parts.filter(
+    (p, i) => p.kind !== 'tool' || (props.msg.streaming === true && i === props.msg.parts.length - 1),
+  ),
+)
+
+/** 有没有真正可展示的内容（用于避免收起状态提示后留下一个空气泡） */
+const hasContent = computed(() => visibleParts.value.length > 0)
+
 /** 用户消息只有一段文本；用函数取值（模板里不支持 TS 类型断言） */
 function userText(): string {
   const p = props.msg.parts[0]
@@ -55,7 +76,11 @@ function userText(): string {
 </script>
 
 <template>
-  <div class="bubble" :class="[`bubble--${msg.role}`, { 'bubble--error': msg.error }]">
+  <div
+    v-if="msg.role === 'user' || hasContent || msg.streaming"
+    class="bubble"
+    :class="[`bubble--${msg.role}`, { 'bubble--error': msg.error }]"
+  >
     <!-- 用户消息 -->
     <template v-if="msg.role === 'user'">
       <div class="bubble__text">{{ userText() }}</div>
@@ -63,10 +88,10 @@ function userText(): string {
 
     <!-- 助手消息：按 parts 顺序渲染 -->
     <template v-else>
-      <template v-for="(part, i) in msg.parts" :key="i">
+      <template v-for="(part, i) in visibleParts" :key="i">
         <!-- 纯文本 -->
         <div v-if="part.kind === 'text' && part.text" class="bubble__text">
-          {{ part.text }}<span v-if="showCursor() && i === msg.parts.length - 1" class="caret" />
+          {{ part.text }}<span v-if="showCursor() && i === visibleParts.length - 1" class="caret" />
         </div>
 
         <!-- 工具调用状态气泡 -->
@@ -122,6 +147,13 @@ function userText(): string {
             应付金额 <span class="order__amount">￥{{ money(part.data.payAmount) }}</span>
           </p>
         </div>
+
+        <!-- 引用卡片（M3.4）：回答口碑/体验类问题时，标注信息来自哪些商品 -->
+        <AiCitationCard
+          v-else-if="part.kind === 'citation'"
+          :items="part.items"
+          @cite="(it) => emit('cite', it)"
+        />
       </template>
     </template>
   </div>

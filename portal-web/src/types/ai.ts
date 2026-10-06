@@ -47,6 +47,21 @@ export interface AiOrder {
   payAmount?: number | null
 }
 
+/**
+ * 引用项（M3.4）：助手回答「使用体验 / 口碑」类问题时，命中的商品信息来源。
+ *
+ * ⚠️ `source === 'product_profile'`（商品档案）的条目 **没有评价数据** ——
+ * `starAvg` / `reviewCount` 会是 `null`，渲染前必须判空，否则会显示「0.0 分 · 0 条评价」。
+ */
+export interface AiCitation {
+  productId: number
+  name: string
+  /** 来源：product_profile（商品档案）/ review_summary（已购评价聚合） */
+  source?: string
+  starAvg?: number | null
+  reviewCount?: number | null
+}
+
 /** 助手消息里的一个片段：按 SSE 事件到达顺序拼装，保证「文字 / 卡片」的先后顺序不乱 */
 export type AiPart =
   | { kind: 'text'; text: string }
@@ -56,6 +71,7 @@ export type AiPart =
   | { kind: 'cart'; data: AiCartAdded }
   | { kind: 'confirm'; data: AiConfirm }
   | { kind: 'order'; data: AiOrder }
+  | { kind: 'citation'; items: AiCitation[] }
 
 /** 一条聊天消息（前端 UI 模型，非后端存储结构） */
 export interface AiMsg {
@@ -77,6 +93,7 @@ export type AiEventType =
   | 'cart_added'
   | 'confirm'
   | 'order'
+  | 'citation'
   | 'need_login'
   | 'done'
   | 'error'

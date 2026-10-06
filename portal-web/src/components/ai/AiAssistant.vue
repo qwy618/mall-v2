@@ -17,7 +17,7 @@ import AiBubble from './AiBubble.vue'
 import { clearChatSession, streamChat } from '@/apis/ai'
 import { useLoginGate } from '@/stores/loginGate'
 import { useUserStore } from '@/stores/user'
-import type { AiConfirm, AiMsg, AiProduct } from '@/types/ai'
+import type { AiCitation, AiConfirm, AiMsg, AiProduct } from '@/types/ai'
 
 const route = useRoute()
 const router = useRouter()
@@ -123,6 +123,10 @@ function handleEvent(msg: AiMsg, type: string, payload: Record<string, unknown>)
       if (confirmed.length) confirmState.value[confirmed[confirmed.length - 1]] = 'done'
       break
     }
+    case 'citation':
+      // M3.4：口碑/体验类回答的信息来源（商品名 + 星级 + 评价数，可回跳详情）
+      msg.parts.push({ kind: 'citation', items: (payload.items as AiCitation[]) || [] })
+      break
     case 'error':
       msg.error = true
       appendText(msg, String(payload.message ?? '服务开小差了，请稍后再试'))
@@ -213,6 +217,12 @@ function onPick(item: AiProduct) {
   router.push({ path: '/product', query: { pid: String(item.id) } })
 }
 
+/** 点击引用卡片（M3.4）：同上，关掉面板直达该商品详情 */
+function onCite(item: AiCitation) {
+  open.value = false
+  router.push({ path: '/product', query: { pid: String(item.productId) } })
+}
+
 async function clearAll() {
   try {
     await ElMessageBox.confirm('清除后将开启一段全新对话，当前对话内容不再显示。', '开启新会话', {
@@ -283,6 +293,7 @@ onBeforeUnmount(() => ctrl?.abort())
             @confirm="onConfirm"
             @cancel="onCancel"
             @pick="onPick"
+            @cite="onCite"
           />
         </div>
 
