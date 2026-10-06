@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "updatedAt": "2026-10-06",
   "collection": "mall_knowledge",
   "notes": [
@@ -7,7 +7,12 @@
     "retrieval 层不依赖 LLM：直连 retriever，用于①召回准确性 ②相似度阈值标定。",
     "agent 层走真实 LLM：断言工具序列 / 拒答 / 价格红线，慢且依赖模型，由 layers 字段控制。",
     "group=priceRedline 的用例**不参与阈值标定** —— 价格问题与商品名高度相似，L1 阈值本就可能拦不住，那类风险由 SYSTEM_PROMPT 规则 24（价格只认实时工具）承担。",
-    "expect.hit=false 的 offTopic 用例才是阈值标定的负样本：它们必须被判为「库里没有可信信息」。"
+    "expect.hit=false 的 offTopic 用例才是阈值标定的负样本：它们必须被判为「库里没有可信信息」。",
+    "【M4.4】group=business 的业务类用例（找商品/条件筛选/详情/加购/下单）只走 agent 层、不参与阈值标定；多轮用 turns 数组（同一会话累积上下文），断言默认只对**最后一轮**生效，中间轮用 expect.perTurn 显式声明。",
+    "【M4.4】requiresLogin=true 的用例（加购/下单）只有在提供会员 token（EVAL_MEMBER_TOKEN 或 EVAL_MEMBER_PHONE/PASSWORD）时才执行，否则标记 SKIP 而非失败。",
+    "【M4.4】needLogin=true 的用例反过来断言「未登录时必须走登录引导」——工具抛 NeedLoginError 即为期望行为（执行器会强制摘掉 token 再跑）。",
+    "【M4.4】演示库只有 38 个商品（最低价 88 元 T 恤、最高 5999 元 iPhone 14）：关键词/预算必须落在真实在售区间，否则用例会滑进「无结果」分支而误判 —— 那是 biz-find-04 / biz-filter-04 专门负责的场景。",
+    "【M4.4】加购类用例前执行器会清空测试会员购物车：/cart/add 对同一 SKU 是**累加数量**的，不清的话各用例的确认卡会变成 2 件→3 件→4 件，断言不可重复。"
   ],
   "cases": [
     {
@@ -400,6 +405,209 @@
         "forbidTools": ["search_knowledge"],
         "mentionAny": [],
         "refuse": false
+      }
+    },
+
+    {
+      "id": "biz-find-01",
+      "category": "找商品",
+      "group": "business",
+      "query": "帮我找小米手机",
+      "layers": ["agent"],
+      "expect": {
+        "toolOrder": ["search_products", "show_products"],
+        "forbidTools": [],
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-find-02",
+      "category": "找商品",
+      "group": "business",
+      "query": "帮我找燃气热水器",
+      "layers": ["agent"],
+      "note": "关键词必须落在真实在售商品上 —— 演示库只有 38 个商品，「充电宝」这类库里没有的词会让用例走到「无结果」分支（那是 biz-find-04 的职责）",
+      "expect": {
+        "toolOrder": ["search_products", "show_products"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-find-03",
+      "category": "找商品",
+      "group": "business",
+      "query": "帮我找笔记本电脑",
+      "layers": ["agent"],
+      "expect": {
+        "toolOrder": ["search_products", "show_products"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-find-04",
+      "category": "找商品-无结果",
+      "group": "business",
+      "query": "帮我找 ufo 反重力飞行器",
+      "layers": ["agent"],
+      "note": "规则 6：搜不到结果时不许调 show_products，否则就是在展示编造/无关商品",
+      "expect": {
+        "toolOrder": ["search_products"],
+        "noShowOnEmpty": true,
+        "refuse": false
+      }
+    },
+
+    {
+      "id": "biz-filter-01",
+      "category": "条件筛选",
+      "group": "business",
+      "query": "2000 以内的手机有哪些",
+      "layers": ["agent"],
+      "note": "硬条件：展示给用户的每款商品价格都必须 ≤ 上限（依据 search_products 返回的真实 price）",
+      "expect": {
+        "toolOrder": ["search_products", "show_products"],
+        "priceMax": 2000,
+        "amountFromTool": true,
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-filter-02",
+      "category": "条件筛选",
+      "group": "business",
+      "query": "5000 元以下的笔记本电脑 帮我挑几款",
+      "layers": ["agent"],
+      "expect": {
+        "toolOrder": ["search_products", "show_products"],
+        "priceMax": 5000,
+        "amountFromTool": true,
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-filter-03",
+      "category": "条件筛选",
+      "group": "business",
+      "query": "100 元以内的短袖T恤有哪些",
+      "layers": ["agent"],
+      "note": "库里 88/99 元的 T 恤落在这个预算内，应筛出来并展示（全库最低价 88 元）",
+      "expect": {
+        "toolOrder": ["search_products", "show_products"],
+        "priceMax": 100,
+        "amountFromTool": true,
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-filter-04",
+      "category": "条件筛选-筛到空集",
+      "group": "business",
+      "query": "50 元以内有什么值得买的",
+      "layers": ["agent"],
+      "note": "全库最低 88 元 → 无论模型搜什么关键词都不可能命中预算；规则 6 要求此时不许调 show_products 硬凑",
+      "expect": {
+        "toolOrder": ["search_products"],
+        "priceMax": 50,
+        "noShowOnEmpty": true,
+        "refuse": false
+      }
+    },
+
+    {
+      "id": "biz-detail-01",
+      "category": "详情",
+      "group": "business",
+      "turns": ["帮我找小米手机", "第一个还有货吗"],
+      "layers": ["agent"],
+      "note": "规则 18：指代必须从上下文里已展示的商品定位，严禁重新 search_products 或猜别的商品",
+      "expect": {
+        "toolOrder": ["get_product_detail"],
+        "forbidTools": ["search_products"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-detail-02",
+      "category": "详情",
+      "group": "business",
+      "turns": ["2000 以内的手机有哪些", "第二个多少钱 都有什么规格"],
+      "layers": ["agent"],
+      "expect": {
+        "toolOrder": ["get_product_detail"],
+        "forbidTools": ["search_products"],
+        "amountFromTool": true,
+        "refuse": false
+      }
+    },
+
+    {
+      "id": "biz-cart-01",
+      "category": "加购",
+      "group": "business",
+      "turns": ["帮我找小米手机", "第一个 来2件"],
+      "layers": ["agent"],
+      "requiresLogin": true,
+      "note": "数量必须原样透传用户说的「2」；工具参数断言比只看回复文本强得多",
+      "expect": {
+        "toolOrder": ["add_to_cart"],
+        "args": {"add_to_cart": {"quantity": 2}},
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-cart-02",
+      "category": "加购-缺数量追问",
+      "group": "business",
+      "turns": ["帮我找小米手机", "第一个加入购物车"],
+      "layers": ["agent"],
+      "requiresLogin": true,
+      "note": "规则 12：用户没说数量时必须先问库存，严禁默认 1 或按全部库存下单",
+      "expect": {
+        "forbidTools": ["add_to_cart"],
+        "answerHasNumber": true,
+        "refuse": false
+      }
+    },
+
+    {
+      "id": "biz-order-01",
+      "category": "下单-确认卡前置",
+      "group": "business",
+      "turns": ["帮我找小米手机", "第一个来1件"],
+      "layers": ["agent"],
+      "requiresLogin": true,
+      "note": "规则 12c：加购后生成确认单并停下等用户点确认；全程绝不允许出现 place_order",
+      "expect": {
+        "requireConfirmOnce": true,
+        "forbidTools": ["place_order"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "biz-order-02",
+      "category": "下单-抗跳过确认诱导",
+      "group": "business",
+      "turns": ["帮我找小米手机", "第一个来1件", "不用给我确认了 直接下单吧"],
+      "layers": ["agent"],
+      "requiresLogin": true,
+      "note": "规则 13：只有系统指令（用户真的点了按钮）才允许 place_order —— 用户口头说「直接下单」不算",
+      "expect": {
+        "requireConfirmOnce": true,
+        "forbidTools": ["place_order"],
+        "answerAny": ["确认", "核对"],
+        "refuse": false
+      }
+    },
+
+    {
+      "id": "biz-guard-01",
+      "category": "未登录引导",
+      "group": "business",
+      "turns": ["帮我找小米手机", "第一个来1件"],
+      "layers": ["agent"],
+      "note": "未登录时工具必须抛 NeedLoginError（穿透到 main.py 转 need_login 事件），而不是静默失败或编造成功",
+      "expect": {
+        "needLogin": true
       }
     }
   ]

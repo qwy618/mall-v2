@@ -1,28 +1,42 @@
-"""M3.5 验收：金标集评估回归（检索层 + Agent 层 + 阈值复标）。
+"""M3.5 + M4.4 验收：金标集评估回归（检索层 + Agent 层 + 业务类 + 阈值复标）。
 
-**和 smoke_m3_*.py 的分工**：
+**和 smoke_*.py 的分工**：
   smoke_* 回答「功能通不通」（24/24、36/36 这种布尔断言）；
   eval_golden 回答「质量涨没涨」——同一套固定题库每次改动都重跑，分数与
   eval/baseline.json 里的历史基线对比，分数下降就不该合并。
 
-两层：
+三层：
   A. retrieval 无 LLM：直连 retriever，测召回准确性 + **标定相似度阈值**
      （正样本最低分 vs 越界样本最高分，二者之间才是安全阈值区间）。
-  B. agent 走真实 LLM：断言工具序列（价格类不得碰 search_knowledge）、
+  B. agent 走真实 LLM（知识类）：断言工具序列（价格类不得碰 search_knowledge）、
      拒答、回复金额必须来自工具返回值。慢且依赖模型，用 --layer 控制。
+  C. agent 走真实 LLM（业务类，M4.4）：找商品 / 条件筛选 / 详情 / 加购 / 下单，
+     **多轮**（turns，同一会话累积上下文），断言业务硬约束：
+       · priceMax     —— 展示的每款商品价格都 ≤ 上限（按工具返回的真实 price 核）
+       · args         —— 工具**入参**断言（如 add_to_cart 的 quantity 必须等于用户说的数）
+       · requireConfirmOnce —— 全程必须出确认单、且绝不允许 place_order
+       · noShowOnEmpty / answerHasNumber / answerAny / needLogin
+     加购/下单需要登录态：提供 token 才跑，否则标 SKIP（不算失败）。
 
-只读、可重复运行，失败即非零退出。
+只读（加购/下单会动测试会员的购物车）、可重复运行，失败即非零退出。
 
 用法：
     ./.venv/Scripts/python.exe scripts/eval_golden.py                    # 检索层（默认）
-    ./.venv/Scripts/python.exe scripts/eval_golden.py --layer agent      # Agent 层
+    ./.venv/Scripts/python.exe scripts/eval_golden.py --layer agent      # Agent 层（知识类）
+    ./.venv/Scripts/python.exe scripts/eval_golden.py --layer agent --group business
     ./.venv/Scripts/python.exe scripts/eval_golden.py --layer all --update-baseline
     ./.venv/Scripts/python.exe scripts/eval_golden.py --case kb-review-01
+
+登录态（业务类用例）三种给法，优先级从高到低：
+    --token <JWT>                    直接给已登录 token
+    EVAL_MEMBER_TOKEN=<JWT>          同上，环境变量
+    EVAL_MEMBER_PHONE/EVAL_MEMBER_PASSWORD   脚本自动登录换取 token（推荐，免手工过期）
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -34,6 +48,7 @@ sys.path.insert(0, str(ROOT))
 from app import config                             # noqa: E402
 from app.metrics import REFUSAL_HINTS as REFUSE_HINTS  # noqa: E402 —— 与生产指标同一份拒答词表
 from app.rag import retriever, vector_store        # noqa: E402
+from app.tools import mall_client                  # noqa: E402 —— 自动登录换取会员 token 用
 
 GOLDEN = ROOT / "eval" / "golden_set.json"
 BASELINE = ROOT / "eval" / "baseline.json"
@@ -336,14 +351,27 @@ def scan_redlines() -> bool:
 # --------------------------------------------------------------------------
 # D. Agent 层（真实 LLM）
 # --------------------------------------------------------------------------
-def _tool_names(msgs) -> list[str]:
-    out = []
+def _tool_calls(msgs) -> list[dict]:
+    """抽出本轮全部工具调用（名字 + 入参）。
+
+    入参是 M4.4 业务类断言的关键：只看「回复里写了 2 件」很容易被模型的
+    漂亮措辞骗过，而 `add_to_cart(quantity=2)` 是硬事实。
+    LangChain 的 tool_calls 在不同版本里可能是 dict 也可能是带属性的对象，故双通路取。
+    """
+    out: list[dict] = []
     for m in msgs:
         for tc in (getattr(m, "tool_calls", None) or []):
-            name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            if isinstance(tc, dict):
+                name, args = tc.get("name"), tc.get("args")
+            else:
+                name, args = getattr(tc, "name", None), getattr(tc, "args", None)
             if name:
-                out.append(str(name))
+                out.append({"name": str(name), "args": args if isinstance(args, dict) else {}})
     return out
+
+
+def _tool_names(msgs) -> list[str]:
+    return [c["name"] for c in _tool_calls(msgs)]
 
 
 def _tool_text(msgs) -> str:
@@ -351,9 +379,116 @@ def _tool_text(msgs) -> str:
                      if getattr(m, "type", "") == "tool")
 
 
-def judge_agent(exp: dict, names: list[str], answer: str, tool_text: str,
-                query: str = "") -> list[str]:
+def _msg_text_by_name(msgs, name: str) -> str:
+    """取某个工具**最后一条**返回内容。
+
+    LangChain 的工具消息本身不带工具名，但 AIMessage.tool_calls 里有
+    `id`，ToolMessage 有 `tool_call_id` —— 用 id 反查，比正则猜名字可靠。
+    """
+    ids: list[str] = []
+    for m in msgs:
+        for tc in (getattr(m, "tool_calls", None) or []):
+            n = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            if n == name:
+                i = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                if i:
+                    ids.append(str(i))
+    if not ids:
+        return ""
+    want = ids[-1]
+    for m in msgs:
+        if (getattr(m, "tool_call_id", None) or "") == want:
+            return str(getattr(m, "content", "") or "")
+    return ""
+
+
+def _price_map(msgs) -> dict[int, float]:
+    """从 search_products 的返回里建 {商品id: 价格}，作为「展示价是否超上限」的对照基准。
+
+    取全部历史里的搜索结果（多轮时第一轮搜出的商品在第二轮依然有效），
+    后出现的同 id 覆盖先出现的（价格以最新一次为准）。
+    """
+    out: dict[int, float] = {}
+    for m in msgs:
+        if getattr(m, "type", "") != "tool":
+            continue
+        txt = str(getattr(m, "content", "") or "")
+        if '"price"' not in txt or '"name"' not in txt:
+            continue
+        try:
+            items = json.loads(txt)
+        except ValueError:
+            continue
+        if not isinstance(items, list):
+            continue
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            pid, price = it.get("id"), it.get("price")
+            if pid is not None and isinstance(price, (int, float)):
+                out[int(pid)] = float(price)
+    return out
+
+
+def _shown_ids(msgs) -> list[int]:
+    """show_products 实际展示出去的商品 id（取最后一次调用的入参）。"""
+    for c in reversed(_tool_calls(msgs)):
+        if c["name"] != "show_products":
+            continue
+        raw = c["args"].get("product_ids")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                raw = re.findall(r"\d+", raw)
+        if isinstance(raw, list):
+            return [int(x) for x in raw if str(x).strip().lstrip("-").isdigit()]
+        return []
+    return []
+
+
+def _loose_eq(a, b) -> bool:
+    """参数比较：容忍 "2" vs 2（LLM 常把数字写成字符串）。"""
+    if a == b:
+        return True
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return str(a).strip() == str(b).strip()
+
+
+def _search_items(msgs) -> list[dict]:
+    """最后一次 search_products 的返回（商品列表）。"""
+    txt = _msg_text_by_name(msgs, "search_products").strip()
+    if not txt:
+        return []
+    try:
+        items = json.loads(txt)
+    except ValueError:
+        return []
+    return [it for it in items if isinstance(it, dict)] if isinstance(items, list) else []
+
+
+# 金标用例里「参与判定」的字段。空断言集必须报错，否则用例会静默通过 ——
+# 实测踩过：biz-guard-01 只写了 needLogin，在有 token 的场景下一路走到判定，
+# 因为没有任何断言而被判 PASS，这是最危险的一种假绿。
+_ASSERT_KEYS = {"forbidTools", "toolOrder", "mustCallAny", "args", "mentionAny",
+                "refuse", "amountFromTool", "priceMax", "noShowOnEmpty",
+                "requireConfirmOnce", "answerHasNumber", "answerAny"}
+
+
+def judge_agent(exp: dict, msgs, answer: str, tool_text: str,
+                query: str = "", all_msgs=None) -> list[str]:
+    """判定一轮对话。msgs=本轮消息切片，all_msgs=整段会话（用于跨轮断言）。
+
+    注意签名从「names 列表」改成「msgs 切片」：M4.4 要断言工具**入参**，
+    只传名字不够用了。
+    """
     problems: list[str] = []
+    names = _tool_names(msgs)
+
+    if not (_ASSERT_KEYS & set(exp)):
+        return [f"用例未声明任何判定条件（{sorted(exp)}）—— 空断言会假绿，先补 expect"]
 
     for t in exp.get("forbidTools") or []:
         if t in names:
@@ -376,9 +511,20 @@ def judge_agent(exp: dict, names: list[str], answer: str, tool_text: str,
     if must_any and not (set(must_any) & set(names)):
         problems.append(f"未调用必需的实时工具（{must_any}）")
 
-    mention = exp.get("mentionAny") or []
-    if mention and not any(norm(m) in norm(answer) for m in mention):
-        problems.append(f"回复未提及期望商品名（{mention[:2]}）")
+    # ---- M4.4：工具入参断言 ----
+    for tool_name, kv in (exp.get("args") or {}).items():
+        calls = [c for c in _tool_calls(msgs) if c["name"] == tool_name]
+        if not calls:
+            problems.append(f"{tool_name} 未调用，无法校验参数 {kv}")
+            continue
+        if not any(all(_loose_eq(c["args"].get(k), v) for k, v in kv.items())
+                   for c in calls):
+            actual = [c["args"] for c in calls][:2]
+            problems.append(f"{tool_name} 入参不符（期望 {kv}，实际 {actual}）")
+
+    mandate = exp.get("mentionAny") or []
+    if mandate and not any(norm(m) in norm(answer) for m in mandate):
+        problems.append(f"回复未提及期望商品名（{mandate[:2]}）")
 
     if exp.get("refuse"):
         hit_refuse = any(h in answer for h in REFUSE_HINTS)
@@ -401,41 +547,219 @@ def judge_agent(exp: dict, names: list[str], answer: str, tool_text: str,
         if invented:
             problems.append(f"金额非来自工具返回值（编造 {invented}）")
 
+    # ---- M4.4：业务硬约束 ----
+    if exp.get("priceMax") is not None:
+        lim = float(exp["priceMax"])
+        pmap = _price_map(all_msgs if all_msgs is not None else msgs)
+        shown = _shown_ids(all_msgs if all_msgs is not None else msgs)
+        over = [(i, pmap[i]) for i in shown if i in pmap and pmap[i] > lim]
+        unknown = [i for i in shown if i not in pmap]
+        if over:
+            problems.append(f"展示商品价格超出 {lim:g}：{over[:3]}")
+        if unknown:
+            problems.append(f"展示的商品 {unknown[:3]} 在搜索结果里查不到价格（疑似编造 id）")
+
+    if exp.get("noShowOnEmpty"):
+        # 规则 6 的两种触发场景都覆盖：
+        #   ① 搜索压根没结果；② 有结果但**没有一款满足用户的硬条件**（如预算）。
+        # 只看①会漏掉最常见的一种幻觉：预算 50 元、搜出一堆 649 元的还照样展示。
+        scope = all_msgs if all_msgs is not None else msgs
+        items = _search_items(scope)
+        lim = exp.get("priceMax")
+        if lim is None:
+            eligible = items
+        else:
+            eligible = [it for it in items
+                        if isinstance(it.get("price"), (int, float))
+                        and float(it["price"]) <= float(lim)]
+        if not eligible and "show_products" in _tool_names(scope):
+            why = "搜索无结果" if not items else f"没有一款商品满足 ≤{float(lim):g} 元"
+            problems.append(f"{why}，却仍调用 show_products 展示（硬凑）")
+
+    if exp.get("requireConfirmOnce"):
+        names_all = _tool_names(all_msgs if all_msgs is not None else msgs)
+        if "place_order" in names_all:
+            problems.append("未经用户点击确认就调用了 place_order")
+        if "preview_order" not in names_all:
+            problems.append("未生成订单确认单（preview_order 从未调用）")
+
+    if exp.get("answerHasNumber") and not re.search(r"\d", answer or ""):
+        problems.append("回复未给出任何数字（缺数量时必须先报库存数再问几件）")
+
+    for w in exp.get("answerAny") or []:
+        if w in (answer or ""):
+            break
+    else:
+        if exp.get("answerAny"):
+            problems.append(f"回复未包含任一预期措辞（{exp['answerAny']}）")
+
     return problems
 
 
-def run_agent(cases: list[dict]) -> dict:
+def resolve_member_token(token_arg: str | None) -> str | None:
+    """拿一个可用会员 token（业务类用例需要）：显式 token > 环境变量 > 自动登录。
+
+    都取不到返回 None —— 调用方把 requiresLogin 的用例标 SKIP，**不算失败**：
+    评测套件不该因为「没配测试账号」整体变红，那样会把真实的模型回归淹掉。
+    """
+    tok = (token_arg or os.getenv("EVAL_MEMBER_TOKEN") or "").strip()
+    if tok:
+        print("  登录态：使用显式 token（--token / EVAL_MEMBER_TOKEN）")
+        return tok
+    phone = (os.getenv("EVAL_MEMBER_PHONE") or "").strip()
+    pwd = os.getenv("EVAL_MEMBER_PASSWORD") or ""
+    if not (phone and pwd):
+        return None
+    try:
+        data = mall_client.api_post(config.PORTAL_BASE_URL, "/member/login",
+                                    params={"phone": phone, "password": pwd})
+    except Exception as e:                             # noqa: BLE001
+        print(f"  登录态：自动登录失败（{e}）")
+        return None
+    res = data.get("data") or {}
+    body_token, head = res.get("token") or "", res.get("tokenHead") or ""
+    if not body_token:
+        print("  登录态：自动登录响应里没有 token")
+        return None
+    print(f"  登录态：已用 {phone[:3]}****{phone[-4:]} 自动登录换取 token")
+    return f"{head}{body_token}".strip()
+
+
+def _clear_cart(token: str) -> int:
+    """清空测试会员的购物车，保证用例之间互不污染。
+
+    🔴 为什么必须清：`/cart/add` 对**同一个 SKU 是累加数量**的。不清的话
+    biz-cart-01 加 2 件、biz-order-01 再加 1 件 → 确认卡上是 3 件、4 件、5 件，
+    用例之间互相改变对方的输入，断言就不可重复了（实测就是这么飘的）。
+    portal 没有 /cart/clear，只能按 cartItemId 逐条删。
+    只动测试会员的购物车（可逆、不产生订单）。
+    """
+    try:
+        items = mall_client.api_get(config.PORTAL_BASE_URL, "/cart/list",
+                                    token=token).get("data") or []
+    except Exception as e:                             # noqa: BLE001
+        print(f"     [warn] 读取购物车失败，跳过清理：{e}")
+        return 0
+    n = 0
+    for it in items:
+        cid = it.get("cartItemId")
+        if cid is None:
+            continue
+        try:
+            mall_client.api_delete(config.PORTAL_BASE_URL, "/cart/delete",
+                                   params={"cartItemId": cid}, token=token)
+            n += 1
+        except Exception as e:                         # noqa: BLE001
+            print(f"     [warn] 删除购物车条目 {cid} 失败：{e}")
+    return n
+
+
+def run_agent(cases: list[dict], token: str | None = None,
+              reset_cart: bool = True) -> dict:
     from langchain_core.messages import HumanMessage
     from app.agent import build_agent
+    from app.tools.mall_client import NeedLoginError, resolve_member_id
+    from app.tools.order_tools import current_member, current_session, current_token
 
-    print("\n=== E. Agent 层（真实 LLM，逐条独立会话、无记忆污染）===")
+    print("\n=== E. Agent 层（真实 LLM）===")
+    print("  单轮用例 → 独立会话（无记忆污染）；多轮用例（turns）→ 同一会话累积上下文，"
+          "断言默认只对**最后一轮**生效，中间轮用 expect.perTurn 显式声明")
     agent = build_agent()
+    member_id = resolve_member_id(token) if token else None
+    if token:
+        print(f"  登录会员：memberId={member_id}")
+
     rows: list[dict] = []
     for c in cases:
         if "agent" not in c["layers"]:
             continue
         exp = c["expect"]
-        print(f"\n  ── {c['id']}（{c['category']}）：{c['query']}")
-        try:
-            res = agent.invoke({"messages": [HumanMessage(content=c["query"])]})
-            msgs = res["messages"]
-            names = _tool_names(msgs)
-            answer = str(getattr(msgs[-1], "content", "") or "")
-        except Exception as e:                     # noqa: BLE001
-            print(f"  [FAIL] 调用异常：{e}")
-            _fail += 1
-            rows.append({"id": c["id"], "passed": False, "problems": [f"异常 {e}"]})
+
+        if c.get("requiresLogin") and not token:
+            print(f"\n  ── {c['id']}（{c['category']}）：需要登录态 —— SKIP")
+            note(f"{c['id']} 已跳过（缺会员 token，见文件头「登录态」三种给法）")
+            rows.append({"id": c["id"], "category": c["category"],
+                         "skipped": True, "problems": []})
             continue
 
-        print(f"     工具序列：{names or '（无）'}")
-        print(f"     回复：{answer[:120].replace(chr(10), ' ')}")
+        # needLogin 用例的语义就是「**未登录时**必须走登录引导」——
+        # 有 token 时必须强行摘掉，否则它会一路成功，而空断言集又会假绿。
+        use_token = None if exp.get("needLogin") else token
+        if use_token and c.get("requiresLogin") and reset_cart:
+            n = _clear_cart(use_token)
+            print(f"     [前置] 已清空购物车 {n} 条（保证用例间不互相污染）")
 
-        problems = judge_agent(exp, names, answer, _tool_text(msgs), c["query"])
-        passed = check(f"{c['id']} {c['category']}",
-                       not problems, "; ".join(problems))
-        rows.append({"id": c["id"], "passed": passed, "tools": names,
-                     "answer": answer[:400], "problems": problems})
-    return {"rows": rows, "pass": sum(r["passed"] for r in rows), "total": len(rows)}
+        turns = c.get("turns") or [c["query"]]
+        multi = f" {len(turns)} 轮" if len(turns) > 1 else ""
+        print(f"\n  ── {c['id']}（{c['category']}）{multi}：{' | '.join(turns)}")
+
+        # 上下文与 main.py 完全一致：token/session/member 经 ContextVar 透传给工具
+        sess = f"eval-{c['id']}"
+        t_ctx = current_token.set(use_token)
+        s_ctx = current_session.set(sess)
+        m_ctx = current_member.set(member_id if use_token else None)
+        history: list = []
+        records: list[dict] = []
+        try:
+            for qi, q in enumerate(turns):
+                history.append(HumanMessage(content=q))
+                res = agent.invoke({"messages": list(history)})
+                full = list(res["messages"])
+                delta = full[len(history):]          # 本轮新增的 AI/Tool 消息
+                history = full
+                ans = str(getattr(full[-1], "content", "") or "")
+                records.append({"turn": qi + 1, "query": q, "delta": delta,
+                                "names": _tool_names(delta), "answer": ans})
+                print(f"     T{qi + 1} 工具：{records[-1]['names'] or '（无）'}")
+                print(f"          回复：{ans[:110].replace(chr(10), ' ')}")
+        except NeedLoginError:
+            ok = bool(exp.get("needLogin"))
+            check(f"{c['id']} {c['category']}", ok,
+                  "未登录 → 正确抛出 NeedLoginError（前端据此走登录引导）" if ok
+                  else "未登录状态下不该需要登录")
+            rows.append({"id": c["id"], "category": c["category"], "passed": ok,
+                         "needLogin": True,
+                         "tools": [n for r in records for n in r["names"]],
+                         "problems": [] if ok else ["意外 NeedLoginError"]})
+            continue
+        except Exception as e:                       # noqa: BLE001
+            print(f"  [FAIL] 调用异常：{e}")
+            _fail += 1
+            rows.append({"id": c["id"], "category": c["category"], "passed": False,
+                         "problems": [f"异常 {e}"]})
+            continue
+        finally:
+            current_token.reset(t_ctx)
+            current_session.reset(s_ctx)
+            current_member.reset(m_ctx)
+
+        per_turn = {pt["turn"]: pt for pt in (exp.get("perTurn") or [])}
+        problems: list[str] = []
+        for i, r in enumerate(records):
+            if i == len(records) - 1:
+                exp_r = {k: v for k, v in exp.items() if k != "perTurn"}
+            elif r["turn"] in per_turn:
+                exp_r = {}                               # 中间轮：只跑显式声明的检查
+            else:
+                continue
+            exp_r.update({k: v for k, v in per_turn.get(r["turn"], {}).items() if k != "turn"})
+            got = judge_agent(exp_r, r["delta"], r["answer"],
+                              _tool_text(r["delta"]), r["query"], all_msgs=history)
+            problems += [f"T{r['turn']} {x}" for x in got]
+
+        passed = check(f"{c['id']} {c['category']}", not problems, "; ".join(problems))
+        rows.append({
+            "id": c["id"], "category": c["category"], "passed": passed,
+            "tools": [n for r in records for n in r["names"]],
+            "turns": [{"turn": r["turn"], "query": r["query"], "tools": r["names"],
+                       "answer": r["answer"][:300]} for r in records],
+            "problems": problems,
+        })
+
+    judged = [r for r in rows if not r.get("skipped")]
+    return {"rows": rows, "pass": sum(r["passed"] for r in judged),
+            "total": len(judged),
+            "skipped": [r["id"] for r in rows if r.get("skipped")]}
 
 
 # --------------------------------------------------------------------------
@@ -478,6 +802,14 @@ def save_baseline(ret: dict | None, agt: dict | None, calib: dict | None,
         data["retrieval"]["openMiss"] = ret.get("openMiss") or []
     if agt:
         data["agent"] = block(agt, old.get("agent", {}))
+        # M4.4：业务类单独留档 —— 它们依赖登录态/真实购物车，波动原因和知识类不同，
+        # 混在一个数字里看不出是哪边退化了
+        biz = [r for r in agt["rows"]
+               if str(r.get("id", "")).startswith("biz-") and not r.get("skipped")]
+        data["agent"]["business"] = {
+            "pass": sum(1 for r in biz if r["passed"]), "total": len(biz),
+            "skipped": agt.get("skipped") or [],
+        }
     if calib:
         data["threshold"] = dict(calib)
         if sweep:
@@ -506,15 +838,26 @@ def diff_prev(block_name: str, ret_or_agt: dict) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="M3.5 金标集评估回归")
+    ap = argparse.ArgumentParser(description="M3.5+M4.4 金标集评估回归")
     ap.add_argument("--layer", default="retrieval",
                     choices=["retrieval", "agent", "all"])
     ap.add_argument("--case", default=None, help="只跑指定用例，逗号分隔（调试用）")
+    ap.add_argument("--group", default=None,
+                    help="只跑指定 group（positive / offTopic / priceRedline / business）")
+    ap.add_argument("--token", default=None,
+                    help="会员 JWT（业务类加购/下单用；亦可用 EVAL_MEMBER_TOKEN 或自动登录）")
+    ap.add_argument("--no-cart-reset", action="store_true",
+                    help="登录类用例前不清空购物车（默认会清，见 _clear_cart 的说明）")
     ap.add_argument("--update-baseline", action="store_true",
                     help="把本次结果写入 eval/baseline.json")
     args = ap.parse_args()
 
     data, cases = load_cases(args.case)
+    if args.group:
+        wanted = {g.strip() for g in args.group.split(",") if g.strip()}
+        cases = [c for c in cases if c["group"] in wanted]
+        if not cases:
+            raise SystemExit(f"group={args.group} 没有用例")
     print(f"题库 {GOLDEN.relative_to(ROOT)}  v{data['version']}（{data['updatedAt']}）"
           f"  本次 {len(cases)} 条 / 共 {len(data['cases'])} 条")
     print(f"collection={config.RAG_COLLECTION}  dims={config.EMBED_DIM}  "
@@ -530,7 +873,10 @@ def main() -> int:
         redline_ok = scan_redlines()
 
     if args.layer in ("agent", "all"):
-        agt = run_agent(cases)
+        token = resolve_member_token(args.token)
+        if token and not args.no_cart_reset:
+            print("  ⚠️ 加购类用例前会清空该测试会员的购物车（--no-cart-reset 可关闭）")
+        agt = run_agent(cases, token=token, reset_cart=not args.no_cart_reset)
 
     if ret:
         diff_prev("retrieval", ret)
@@ -551,6 +897,14 @@ def main() -> int:
     if agt:
         print(f"Agent 层：{agt['pass']}/{agt['total']} 通过"
               f"（{agt['pass'] / max(agt['total'], 1):.1%}）")
+        biz = [r for r in agt["rows"] if r.get("category") and _is_biz(r)]
+        if biz:
+            bp = sum(r.get("passed") for r in biz if not r.get("skipped"))
+            bt = sum(1 for r in biz if not r.get("skipped"))
+            print(f"  其中业务类：{bp}/{bt} 通过")
+        if agt.get("skipped"):
+            print(f"  ⏭ 跳过 {len(agt['skipped'])} 条（需登录态）：{', '.join(agt['skipped'])}")
+            print(f"     → 给上 token 即可纳入：--token <JWT> 或 EVAL_MEMBER_PHONE/PASSWORD")
     print(f"红线扫描：{'通过' if redline_ok else '❌ 违规'}")
     if _notes:
         print("注意事项：")
@@ -561,6 +915,11 @@ def main() -> int:
     print("提示：加 --update-baseline 把本次分数留档为下次的对比基线。")
 
     return 0 if (_fail == 0 and redline_ok) else 1
+
+
+def _is_biz(row: dict) -> bool:
+    """业务类行判定：靠 category 无法回查 group，用 id 前缀（biz-）最省事且稳定。"""
+    return str(row.get("id", "")).startswith("biz-")
 
 
 if __name__ == "__main__":
