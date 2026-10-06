@@ -28,11 +28,17 @@ from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from sse_starlette.sse import EventSourceResponse
 
-from . import orders, sessions, store, summarize
+from . import orders, scheduler, sessions, store, summarize
 from .agent import build_agent
 from .schemas import ChatRequest, ClearRequest
 from .tools.mall_client import NeedLoginError, resolve_member_id
 from .tools.order_tools import current_member, current_session, current_token
+
+# 让应用自身的 INFO 日志（Redis 自检 / 定时索引启动）能进终端与日志文件：
+# uvicorn 只配置它自己的 logger，root 默认 WARNING → 不显式设置的话这些日志会被吞掉，
+# 出问题时"什么都看不到"。只在 root 没 handler 时生效（basicConfig 自带幂等判断）。
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +47,13 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI):
     # 状态层自检：Redis 不通就快速失败，避免服务"起得来但会话全丢"的诡异故障
     store.assert_available()
-    yield
+    # M3.3 定时增量索引（APScheduler）：RAG_ENABLED=0 自动跳过；
+    # 多 worker 下靠 ai:rag:lock 单飞，索引本身出问题只降级为"检索不到"，不影响对话
+    scheduler.startup()
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
 
 
 app = FastAPI(title="mall-ai-agent", version="0.3.0", lifespan=lifespan)
@@ -245,14 +257,17 @@ async def chat_stream(req: ChatRequest):
     """SSE 流式版：H5 聊天页使用。
 
     事件类型：
-      token    {content}     一段回复文本（前端追加渲染，实现打字机效果）
-      tool     {name, args}  一次工具调用（前端显示「正在搜索商品…」）
-      products {items}       商品卡片（show_products 认可的真实搜索结果）
-      product  {item}        单个商品详情卡片
-      confirm  {draftId,...} 订单确认卡片（preview_order 生成草稿，等用户点确认）
-      order    {orderId,...} 下单成功卡片（用户确认后 place_order 的结果）
-      done     {}            本轮结束
-      error    {message}     出错（如 mall 接口不可用 / LLM 调用失败）
+      token     {content}     一段回复文本（前端追加渲染，实现打字机效果）
+      tool      {name, args}  一次工具调用（前端显示「正在搜索商品…」）
+      products  {items}       商品卡片（show_products 认可的真实搜索结果）
+      product   {item}        单个商品详情卡片
+      cart_added {cartId,...} 加购成功卡片
+      confirm   {draftId,...} 订单确认卡片（preview_order 生成草稿，等用户点确认）
+      order     {orderId,...} 下单成功卡片（用户确认后 place_order 的结果）
+      citation  {items}       引用卡片（search_knowledge 命中的口碑来源；在本轮正文之后统一发）
+      need_login {message}    未登录（前端弹登录引导，不算对话错误）
+      done      {}            本轮结束
+      error     {message}     出错（如 mall 接口不可用 / LLM 调用失败）
     """
     async def event_stream():
         try:
@@ -276,6 +291,8 @@ async def chat_stream(req: ChatRequest):
             # 本轮搜索累计的商品 id → 原始数据。卡片只展示 show_products 认可的商品，
             # 这样卡片与回复文字永远一致，LLM 编造不出卡片，也不会展示无关商品
             found_items: dict = {}
+            # 本轮命中的引用（search_knowledge）→ 攒起来，等正文流完再发（见循环末尾）
+            cites_acc: list = []
             # values 流：每个节点执行后的完整状态，最后一帧含全部消息（含工具消息），
             # 用它覆盖会话历史，保证跨轮次上下文完整（「买第一款」依赖工具消息里的 id）
             final_state = None
@@ -356,10 +373,35 @@ async def chat_stream(req: ChatRequest):
                                 "orderSn": order.get("orderSn"),
                                 "payAmount": order.get("payAmount"),
                             })
+                    elif tool_name == "search_knowledge":
+                        # 语义道检索命中 → 引用卡片（商品名 + 星级 + 评价数 + 可回跳）
+                        # 只推前端可展示字段：**不含 score / indexedAt**（内部标识不外泄）
+                        try:
+                            kb = json.loads(content)
+                        except (json.JSONDecodeError, TypeError):
+                            kb = {}
+                        if isinstance(kb, dict) and kb.get("hit"):
+                            cites = [
+                                {
+                                    "productId": it.get("productId"),
+                                    "name": it.get("name") or "",
+                                    "source": it.get("docType") or "",
+                                    "starAvg": it.get("starAvg"),
+                                    "reviewCount": it.get("reviewCount"),
+                                }
+                                for it in (kb.get("items") or [])
+                                if it.get("productId")
+                            ]
+                            cites_acc.extend(cites)
                 # 只推 AI 的文本；tool 消息(原始JSON)不给前端
                 if msg_type != "tool" and content:
                     full_reply += content
                     yield _sse("token", {"content": content})
+            # 引用卡片（M3.4）统一放在正文**之后**：与「参考资料」的阅读习惯一致，
+            # 也避免卡片把「过渡语 → 正式回答」从中截断。
+            # 工具返回时只攒进 cites_acc，等本轮 token 流跑完（回答已完整流给用户）再发一次。
+            if cites_acc:
+                yield _sse("citation", {"items": cites_acc})
             # 写路径：只追加本轮新增的消息；拿不到 final_state 时退回"用户问 + 助手答"两条
             if isinstance(final_state, dict) and isinstance(final_state.get("messages"), list):
                 sessions.append_turn(session_id, _delta(final_state["messages"], n_stored), member_id)
