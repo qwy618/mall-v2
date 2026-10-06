@@ -1,0 +1,406 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-06",
+  "collection": "mall_knowledge",
+  "notes": [
+    "题库与打分代码分离：本文件是数据，scripts/eval_golden.py 是执行器。改题不用碰代码。",
+    "retrieval 层不依赖 LLM：直连 retriever，用于①召回准确性 ②相似度阈值标定。",
+    "agent 层走真实 LLM：断言工具序列 / 拒答 / 价格红线，慢且依赖模型，由 layers 字段控制。",
+    "group=priceRedline 的用例**不参与阈值标定** —— 价格问题与商品名高度相似，L1 阈值本就可能拦不住，那类风险由 SYSTEM_PROMPT 规则 24（价格只认实时工具）承担。",
+    "expect.hit=false 的 offTopic 用例才是阈值标定的负样本：它们必须被判为「库里没有可信信息」。"
+  ],
+  "cases": [
+    {
+      "id": "kb-review-01",
+      "retrievalMode": "filtered",
+      "category": "口碑问答",
+      "group": "positive",
+      "query": "小米12 Pro 用起来怎么样",
+      "layers": ["retrieval", "agent"],
+      "expect": {
+        "hit": true,
+        "productIds": [40],
+        "toolOrder": ["search_knowledge"],
+        "forbidTools": [],
+        "mentionAny": ["小米12 Pro", "小米 12 Pro", "12 Pro"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-review-02",
+      "retrievalMode": "filtered",
+      "category": "口碑问答",
+      "group": "positive",
+      "query": "iPhone 14 的口碑怎么样 用户真实反馈",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [37],
+        "mentionAny": ["iPhone 14", "iPhone14"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-review-03",
+      "retrievalMode": "filtered",
+      "category": "口碑问答",
+      "group": "positive",
+      "query": "Redmi K50 用着怎么样 值得买吗",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [41],
+        "mentionAny": ["Redmi K50", "红米K50", "K50"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-review-04",
+      "retrievalMode": "filtered",
+      "category": "口碑问答",
+      "group": "positive",
+      "query": "iPad 10.9英寸 用户评价如何",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [38],
+        "mentionAny": ["iPad"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-review-05",
+      "retrievalMode": "filtered",
+      "category": "口碑问答",
+      "group": "positive",
+      "query": "万和燃气热水器用起来怎么样 水温稳不稳",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [43],
+        "mentionAny": ["万和", "热水器"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-review-06",
+      "retrievalMode": "filtered",
+      "category": "口碑问答",
+      "group": "positive",
+      "query": "三星 500GB 固态硬盘 体验怎么样 速度快吗",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [44],
+        "mentionAny": ["三星", "SSD", "固态硬盘"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-review-07",
+      "retrievalMode": "filtered",
+      "category": "口碑问答",
+      "group": "positive",
+      "query": "小米笔记本 Pro 14 用着舒服吗 值得入手吗",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [39],
+        "mentionAny": ["小米", "Book Pro", "笔记本"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-con-01",
+      "retrievalMode": "filtered",
+      "category": "优缺点",
+      "group": "positive",
+      "query": "小米12 Pro 有什么槽点 缺点",
+      "layers": ["retrieval", "agent"],
+      "expect": {
+        "hit": true,
+        "productIds": [40],
+        "toolOrder": ["search_knowledge"],
+        "forbidTools": [],
+        "mentionAny": ["小米12 Pro", "小米 12 Pro", "12 Pro"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-con-02",
+      "retrievalMode": "filtered",
+      "category": "优缺点",
+      "group": "positive",
+      "query": "iPhone 14 的缺点是什么 有什么不好",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [37],
+        "mentionAny": ["iPhone 14", "iPhone14"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-con-03",
+      "retrievalMode": "filtered",
+      "category": "优缺点",
+      "group": "positive",
+      "query": "华为 Mate 50 有哪些不足 用户吐槽什么",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [42, 26],
+        "mentionAny": ["Mate 50", "华为"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-con-04",
+      "retrievalMode": "filtered",
+      "category": "优缺点",
+      "group": "positive",
+      "query": "OPPO Reno8 有什么毛病 真实吐槽",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [45],
+        "mentionAny": ["Reno8", "OPPO"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-who-01",
+      "category": "适用人群",
+      "group": "positive",
+      "query": "适合学生党用的手机 想听听真实口碑",
+      "layers": ["retrieval", "agent"],
+      "expect": {
+        "hit": true,
+        "productIds": [37, 40, 41, 42, 45],
+        "toolOrder": ["search_knowledge"],
+        "forbidTools": [],
+        "mentionAny": [],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-who-02",
+      "category": "适用人群",
+      "group": "positive",
+      "query": "想买来打游戏的手机 用久了烫不烫 口碑怎么样",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [37, 40, 41, 42, 45],
+        "mentionAny": [],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-who-03",
+      "retrievalMode": "filtered",
+      "category": "适用人群",
+      "group": "positive",
+      "query": "绝版蜘蛛侠适合多大孩子玩 好玩吗",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [47],
+        "mentionAny": ["蜘蛛侠"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-mix-01",
+      "category": "混合筛选",
+      "group": "positive",
+      "query": "2000 以内的手机哪个口碑好",
+      "layers": ["retrieval", "agent"],
+      "expect": {
+        "hit": true,
+        "productIds": [37, 40, 41, 42, 45],
+        "toolOrder": ["search_products", "search_knowledge"],
+        "forbidTools": [],
+        "mentionAny": [],
+        "refuse": false,
+        "amountFromTool": true
+      }
+    },
+    {
+      "id": "kb-mix-02",
+      "retrievalMode": "filtered",
+      "category": "混合筛选",
+      "group": "positive",
+      "query": "5000 以内的轻薄笔记本 用起来怎么样",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [39],
+        "mentionAny": ["小米", "Book Pro", "笔记本"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-mix-03",
+      "retrievalMode": "filtered",
+      "category": "混合筛选",
+      "group": "positive",
+      "query": "华为手机拍照口碑怎么样 值得买吗",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [42, 26],
+        "mentionAny": ["华为", "Mate"],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-cmp-01",
+      "retrievalMode": "filtered",
+      "category": "商品对比",
+      "group": "positive",
+      "query": "小米12 Pro 和 Redmi K50 哪个更好用",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [40, 41],
+        "mentionAny": [],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-cmp-02",
+      "category": "商品对比",
+      "group": "positive",
+      "query": "有没有发热控制好的手机 用久了不烫的那种",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": true,
+        "productIds": [37, 40, 41, 42, 45],
+        "mentionAny": [],
+        "refuse": false
+      }
+    },
+    {
+      "id": "kb-refuse-01",
+      "category": "知识拒答",
+      "group": "offTopic",
+      "query": "今天天气怎么样 要下雨吗",
+      "layers": ["retrieval", "agent"],
+      "expect": {
+        "hit": false,
+        "toolOrder": [],
+        "forbidTools": [],
+        "mentionAny": [],
+        "refuse": true
+      }
+    },
+    {
+      "id": "kb-refuse-02",
+      "category": "知识拒答",
+      "group": "offTopic",
+      "query": "红烧肉怎么做 家常菜谱步骤",
+      "layers": ["retrieval", "agent"],
+      "expect": {
+        "hit": false,
+        "toolOrder": [],
+        "forbidTools": [],
+        "mentionAny": [],
+        "refuse": true
+      }
+    },
+    {
+      "id": "kb-refuse-03",
+      "category": "知识拒答",
+      "group": "offTopic",
+      "query": "特斯拉 Model 3 省油吗 保养贵不贵",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": false,
+        "mentionAny": [],
+        "refuse": true
+      }
+    },
+    {
+      "id": "kb-refuse-04",
+      "category": "知识拒答",
+      "group": "offTopic",
+      "query": "怎么申请信用卡 需要什么材料",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": false,
+        "mentionAny": [],
+        "refuse": true
+      }
+    },
+    {
+      "id": "kb-refuse-05",
+      "category": "知识拒答",
+      "group": "offTopic",
+      "query": "推荐几部最近好看的电影",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": false,
+        "mentionAny": [],
+        "refuse": true
+      }
+    },
+    {
+      "id": "kb-refuse-06",
+      "category": "知识拒答",
+      "group": "offTopic",
+      "query": "股票怎么开户 需要多少钱",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": false,
+        "mentionAny": [],
+        "refuse": true
+      }
+    },
+    {
+      "id": "kb-price-01",
+      "category": "价格红线",
+      "group": "priceRedline",
+      "query": "小米12 Pro 多少钱",
+      "layers": ["retrieval", "agent"],
+      "expect": {
+        "hit": false,
+        "toolOrder": [],
+        "forbidTools": ["search_knowledge"],
+        "mustCallAny": ["get_product_detail", "search_products"],
+        "mentionAny": [],
+        "refuse": false,
+        "amountFromTool": true
+      }
+    },
+    {
+      "id": "kb-price-02",
+      "category": "价格红线",
+      "group": "priceRedline",
+      "query": "iPhone 14 现在什么价格 多少钱能买到",
+      "layers": ["retrieval", "agent"],
+      "expect": {
+        "hit": false,
+        "toolOrder": [],
+        "forbidTools": ["search_knowledge"],
+        "mustCallAny": ["get_product_detail", "search_products"],
+        "mentionAny": [],
+        "refuse": false,
+        "amountFromTool": true
+      }
+    },
+    {
+      "id": "kb-price-03",
+      "category": "价格红线",
+      "group": "priceRedline",
+      "query": "红米 K50 还有货吗 库存多少",
+      "layers": ["retrieval"],
+      "expect": {
+        "hit": false,
+        "forbidTools": ["search_knowledge"],
+        "mentionAny": [],
+        "refuse": false
+      }
+    }
+  ]
+}

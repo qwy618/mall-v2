@@ -1,0 +1,140 @@
+{
+  "collection": "mall_knowledge",
+  "embedModel": "BAAI/bge-small-zh-v1.5",
+  "retrieval": {
+    "pass": 25,
+    "total": 25,
+    "rate": 1.0,
+    "updatedAt": "2026-10-06 12:35",
+    "byCategory": {
+      "口碑问答": {
+        "pass": 7,
+        "total": 7
+      },
+      "优缺点": {
+        "pass": 4,
+        "total": 4
+      },
+      "适用人群": {
+        "pass": 3,
+        "total": 3
+      },
+      "混合筛选": {
+        "pass": 3,
+        "total": 3
+      },
+      "商品对比": {
+        "pass": 2,
+        "total": 2
+      },
+      "知识拒答": {
+        "pass": 6,
+        "total": 6
+      }
+    },
+    "scores": {
+      "kb-review-01": 0.717,
+      "kb-review-02": 0.6906,
+      "kb-review-03": 0.6283,
+      "kb-review-04": 0.7208,
+      "kb-review-05": 0.7869,
+      "kb-review-06": 0.815,
+      "kb-review-07": 0.7372,
+      "kb-con-01": 0.6739,
+      "kb-con-02": 0.6463,
+      "kb-con-03": 0.5609,
+      "kb-con-04": 0.5709,
+      "kb-who-01": 0.6096,
+      "kb-who-02": 0.5891,
+      "kb-who-03": 0.6227,
+      "kb-mix-01": 0.6277,
+      "kb-mix-02": 0.6851,
+      "kb-mix-03": 0.5764,
+      "kb-cmp-01": 0.6921,
+      "kb-cmp-02": 0.5701,
+      "kb-refuse-01": 0.3734,
+      "kb-refuse-02": 0.2877,
+      "kb-refuse-03": 0.456,
+      "kb-refuse-04": 0.4229,
+      "kb-refuse-05": 0.3718,
+      "kb-refuse-06": 0.345,
+      "kb-price-01": 0.735,
+      "kb-price-02": 0.629,
+      "kb-price-03": 0.594
+    },
+    "openMiss": [
+      "kb-con-04"
+    ]
+  },
+  "agent": {
+    "pass": 8,
+    "total": 8,
+    "rate": 1.0,
+    "updatedAt": "2026-10-06 12:35"
+  },
+  "threshold": {
+    "positiveMin": 0.5022,
+    "positiveMinCase": "kb-con-04",
+    "offTopicMax": 0.456,
+    "offTopicMaxCase": "kb-refuse-03",
+    "priceRedlineMax": 0.735,
+    "current": 0.48,
+    "sample": 25,
+    "separable": true,
+    "safeLo": 0.456,
+    "safeHi": 0.5022,
+    "recommend": 0.48,
+    "marginLo": 0.024,
+    "marginHi": 0.0222,
+    "sweep": {
+      "0.44": {
+        "posHit": 19,
+        "posTotal": 19,
+        "negLeak": 1,
+        "negTotal": 6,
+        "passed": 24,
+        "total": 25
+      },
+      "0.46": {
+        "posHit": 19,
+        "posTotal": 19,
+        "negLeak": 0,
+        "negTotal": 6,
+        "passed": 25,
+        "total": 25
+      },
+      "0.48": {
+        "posHit": 19,
+        "posTotal": 19,
+        "negLeak": 0,
+        "negTotal": 6,
+        "passed": 25,
+        "total": 25
+      },
+      "0.50": {
+        "posHit": 19,
+        "posTotal": 19,
+        "negLeak": 0,
+        "negTotal": 6,
+        "passed": 25,
+        "total": 25
+      },
+      "0.52": {
+        "posHit": 18,
+        "posTotal": 19,
+        "negLeak": 0,
+        "negTotal": 6,
+        "passed": 24,
+        "total": 25
+      },
+      "0.54": {
+        "posHit": 18,
+        "posTotal": 19,
+        "negLeak": 0,
+        "negTotal": 6,
+        "passed": 24,
+        "total": 25
+      }
+    }
+  }
+}
