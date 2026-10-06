@@ -626,3 +626,81 @@ def release_rag_lock(token: str) -> None:
 def peek_rag_lock() -> bool:
     """锁是否被持有（`--check` 用；不参与判断，只做诊断）。"""
     return bool(client().exists(_k_rag_lock()))
+
+
+# ---------------------------------------------------------------- 治理（M4）
+
+# INCR + 首次设 TTL，原子完成。
+# 为什么必须原子：`INCR` 后 `EXPIRE` 分两步时，若进程在中间异常/被杀，
+# 会留下**没有 TTL 的计数键 → 计数永不归零**，该身份在该窗口被永久限死（极难排查）。
+# 为什么只在 n==1 时设：若每次 INCR 都续期，窗口会退化成"最后一次请求后 N 秒"
+# 即滑动窗口——与"按分钟固定窗口"的语义不符，攻击者可持续续期永不被限。
+_INCR_WINDOW_LUA = (
+    "local n = redis.call('INCR', KEYS[1]) "
+    "if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end "
+    "return n"
+)
+
+# 累加用量 + 仅在缺 TTL 时补齐（用于 token 总量，多轮 INCRBY 不重置窗口）
+_ADD_TOKENS_LUA = (
+    "local n = redis.call('INCRBY', KEYS[1], ARGV[1]) "
+    "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+    "return n"
+)
+
+_RATE_TTL_SLACK = 90              # 分钟桶的冗余 TTL
+_QUOTA_TTL_SLACK = 86400 + 90     # 日桶的冗余 TTL（跨日换 key，无需清理任务）
+
+
+def _k_rate(subject: str, bucket: str) -> str:
+    """限流键。**桶名进 key** → 天然按分钟重置，不需要"读-判断-重置"三步。"""
+    return f"ai:rate:{subject}:{bucket}"
+
+
+def _k_quota(subject: str, day: str) -> str:
+    return f"ai:quota:{subject}:{day}"
+
+
+def _k_token_day(day: str) -> str:
+    """全站当日 token 总量。⚠️ 这里**没有 subject**——它是全局计数，不是一个用户的。"""
+    return f"ai:token:day:{day}"
+
+
+def hit_rate(subject: str, ttl: int = _RATE_TTL_SLACK) -> int:
+    """当前分钟桶累计次数（**含本次**）。先计数再判断——并发下才是精确的。"""
+    return int(client().eval(_INCR_WINDOW_LUA, 1,
+                             _k_rate(subject, time.strftime("%Y%m%d%H%M")), ttl))
+
+
+def peek_rate(subject: str) -> int:
+    """当前分钟桶次数，不递增（验收/诊断用）。"""
+    return _as_int(client().get(_k_rate(subject, time.strftime("%Y%m%d%H%M"))))
+
+
+def hit_quota(subject: str, ttl: int = _QUOTA_TTL_SLACK) -> int:
+    """当日累计次数（含本次）。跨日自动换 key。"""
+    return int(client().eval(_INCR_WINDOW_LUA, 1,
+                             _k_quota(subject, time.strftime("%Y%m%d")), ttl))
+
+
+def peek_quota(subject: str) -> int:
+    return _as_int(client().get(_k_quota(subject, time.strftime("%Y%m%d"))))
+
+
+def add_tokens(n: int, ttl: int = _QUOTA_TTL_SLACK) -> int:
+    """累加全站当日 token 用量，返回累计值。n<=0 时只读不写。"""
+    if n <= 0:
+        return peek_tokens()
+    return int(client().eval(_ADD_TOKENS_LUA, 1,
+                             _k_token_day(time.strftime("%Y%m%d")), n, ttl))
+
+
+def peek_tokens() -> int:
+    return _as_int(client().get(_k_token_day(time.strftime("%Y%m%d"))))
+
+
+def _as_int(v) -> int:
+    try:
+        return int(v) if v is not None else 0
+    except (TypeError, ValueError):
+        return 0

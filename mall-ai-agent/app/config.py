@@ -101,3 +101,56 @@ RAG_INDEX_BATCH = int(os.getenv("RAG_INDEX_BATCH", "32"))
 RAG_SKIP_NAME_PATTERN = os.getenv("RAG_SKIP_NAME_PATTERN", r"^(test|xxx|\d+)$")
 #   单飞锁 TTL（秒）：多 worker 下只允许一个实例真正重建
 RAG_LOCK_TTL = int(os.getenv("RAG_LOCK_TTL", "300"))
+
+# ---------------------------------------------------------------- 治理（M4）
+#
+# 三层防线，越靠前越"便宜"：
+#   限流（分钟窗口）→ 挡瞬时刷量；配额（日窗口）→ 限总量；成本上限 → 保命
+# 计数一律放 Redis（多 worker 共享）——进程内计数等于每个 worker 各算一份，形同虚设。
+#
+# 一键回退：置 0 后完全跳过治理检查（排查"是不是治理误伤"时用）
+GUARD_ENABLED = os.getenv("GUARD_ENABLED", "1").lower() not in ("0", "false", "no")
+
+#   限流：会员按 memberId；游客按 **IP**
+#   —— 游客不能用 session_id 当身份：那是前端生成的，换一个就绕过了
+RATE_PER_MIN_MEMBER = int(os.getenv("RATE_PER_MIN_MEMBER", "10"))
+RATE_PER_MIN_GUEST = int(os.getenv("RATE_PER_MIN_GUEST", "5"))
+
+#   配额：日累计。游客给得少（匿名流量最容易刷）
+QUOTA_PER_DAY_MEMBER = int(os.getenv("QUOTA_PER_DAY_MEMBER", "100"))
+QUOTA_PER_DAY_GUEST = int(os.getenv("QUOTA_PER_DAY_GUEST", "20"))
+
+#   成本上限：**全站**日 token 总量（含所有用户）。超阈后新请求切到 fallback 模型；
+#   fallback 未配置则当日停止对话（宁可拒答，不可烧穿预算）
+DAILY_TOKEN_LIMIT = int(os.getenv("DAILY_TOKEN_LIMIT", "2000000"))
+DEEPSEEK_FALLBACK_MODEL = os.getenv("DEEPSEEK_FALLBACK_MODEL", "")
+
+#   LLM 超时：不设的话上游卡住会一直挂着，SSE 连接既不返回也不报错（最难排查的一种）
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
+#   SDK 自动重试次数：默认 0——重试会放大 token 消耗；且用户已感到"卡住"，
+#   与其默默重试不如直接告诉他稍后再试
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "0"))
+
+#   计数键 TTL 冗余量（秒）：只需覆盖一个窗口，跨窗换 key 故不会互相污染
+GUARD_KEY_TTL_SLACK = int(os.getenv("GUARD_KEY_TTL_SLACK", "90"))
+
+# ---------------------------------------------------------------- 安全（M4.2）
+# CORS 白名单：逗号分隔的完整源。默认只放行 portal-web 的两个开发端口。
+# 置为 * 是**显式开发逃生口**（此时退回放开所有源）。
+CORS_ALLOW_ORIGINS = [o.strip() for o in os.getenv(
+    "CORS_ALLOW_ORIGINS",
+    "http://localhost:3001,http://127.0.0.1:3001,"
+    "http://localhost:5173,http://127.0.0.1:5173",
+).split(",") if o.strip()]
+
+# 额外放行正则：开发期 Vite 端口会变、手机真机走局域网 IP 联调。
+# 只放行 RFC1918 私网与本机回环，**不匹配任意公网域名**——收紧 CORS 的意义在于
+# 拦住"第三方站点拿用户浏览器当跳板"，私网地址不具备这个威胁面。
+CORS_ALLOW_ORIGIN_REGEX = os.getenv(
+    "CORS_ALLOW_ORIGIN_REGEX",
+    r"^https?://(?:localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::\d+)?$",
+)
+
+# 日志脱敏：日志与异常堆栈里绝不出现 token / 密钥 / 手机号
+LOG_REDACT = os.getenv("LOG_REDACT", "1").lower() not in ("0", "false", "no")

@@ -22,13 +22,13 @@ if __package__ in (None, ""):
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from sse_starlette.sse import EventSourceResponse
 
-from . import orders, scheduler, sessions, store, summarize
+from . import config, guard, logmask, orders, scheduler, sessions, store, summarize
 from .agent import build_agent
 from .schemas import ChatRequest, ClearRequest
 from .tools.mall_client import NeedLoginError, resolve_member_id
@@ -39,6 +39,9 @@ from .tools.order_tools import current_member, current_session, current_token
 # 出问题时"什么都看不到"。只在 root 没 handler 时生效（basicConfig 自带幂等判断）。
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+# M4.2：把脱敏 formatter 装到上面的 handler 上（连 exc_info 堆栈一起脱），
+# 并把 httpx/httpcore 等压到 WARNING——它们 DEBUG 时会打印 Authorization 头
+logmask.install()
 
 logger = logging.getLogger(__name__)
 
@@ -58,24 +61,32 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="mall-ai-agent", version="0.3.0", lifespan=lifespan)
 
-# 移动端 H5 跨域访问：开发期放开所有源（vite 端口可能变化/手机真机用局域网 IP），
-# token 在请求体里、不走 cookie，无 CSRF 风险；P6 加固时再收紧白名单
+# 移动端 H5 跨域访问（M4.2 收紧）：白名单 + 私网正则。
+# 原来放 "*" 是为了开发方便，但那是"任何网站都能用用户浏览器调这个服务"。
+# 现在显式列出 portal-web 的端口，并用正则兜住 Vite 换端口/手机真机走局域网 IP
+# 的联调场景（只放行回环与 RFC1918 私网，公网域名一律不在内）。
+# token 在请求体里、不走 cookie，故不需要 allow_credentials。
+_allow_all = config.CORS_ALLOW_ORIGINS == ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"] if _allow_all else config.CORS_ALLOW_ORIGINS,
+    allow_origin_regex=None if _allow_all else config.CORS_ALLOW_ORIGIN_REGEX,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
-# 懒加载单例：create_react_agent 编译出的图是线程安全的，可跨请求复用
-_agent = None
+# 懒加载单例：create_react_agent 编译出的图线程安全，可跨请求复用。
+# 分两个槽位缓存：primary 用主模型；fallback 用降级模型
+# （M4：全站日 token 超阈时切过去——服务降级，但不中断）
+_agents: dict[str, object] = {}
 
 
-def get_agent():
-    global _agent
-    if _agent is None:
-        _agent = build_agent()
-    return _agent
+def get_agent(degraded: bool = False):
+    key = "fallback" if degraded else "primary"
+    if key not in _agents:
+        _agents[key] = build_agent(
+            model=config.DEEPSEEK_FALLBACK_MODEL if degraded else None)
+    return _agents[key]
 
 
 @app.get("/health")
@@ -217,22 +228,29 @@ def _build_confirm(session_id: str, member_id, content: str) -> dict | None:
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
-    """非流式版：调试/curl 用。会话记忆与流式版共用。"""
-    try:
-        agent = get_agent()
-    except RuntimeError as e:
-        return JSONResponse(status_code=503, content={"error": str(e)})
+def chat(req: ChatRequest, request: Request):
+    """非流式版：调试/curl 用。会话记忆与流式版共用。
+
+    同样过治理门禁——不因为是「调试接口」就留后门。
+    """
     session_id = req.session_id or "default"
     member_id = resolve_member_id(req.token)          # M1：会话归属绑定会员
+    decision = guard.check(guard.ip_of(request), member_id)
+    if not decision.allowed:
+        return JSONResponse(status_code=429, content=decision.as_event())
+    try:
+        agent = get_agent(degraded=decision.degraded)
+    except RuntimeError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
     # 读路径：从事实源做分级装配（可能被压缩），只读、不落库
     sent, n_stored = sessions.assemble_history(session_id, member_id, _incoming(req))
     summarize.maybe_schedule(session_id, member_id)   # T3：惰性异步压摘要，不阻塞本轮
     tok_ctx = current_token.set(req.token or None)
     ses_ctx = current_session.set(session_id)
     mem_ctx = current_member.set(member_id)
+    usage = guard.TokenUsageCollector()               # M4：本轮 token 计量
     try:
-        result = agent.invoke({"messages": sent})
+        result = agent.invoke({"messages": sent}, config={"callbacks": [usage]})
     except NeedLoginError:
         # 未登录：返回 401 + 跳转指令，前端据此跳登录页
         return JSONResponse(status_code=401, content={
@@ -240,7 +258,13 @@ def chat(req: ChatRequest):
             "message": "请先登录后再进行此操作",
             "redirect": "/login",
         })
+    except Exception as e:  # noqa: BLE001
+        # M4：不回原始异常文本（可能含内网地址/连接串/栈帧），原文只进日志
+        code, message = guard.classify_exception(e)
+        logger.exception("非流式对话失败 code=%s", code)
+        return JSONResponse(status_code=502, content={"error": message, "code": code})
     finally:
+        guard.record_usage(usage.total)               # M4：累加全站当日 token
         current_token.reset(tok_ctx)
         current_session.reset(ses_ctx)
         current_member.reset(mem_ctx)
@@ -253,7 +277,7 @@ def chat(req: ChatRequest):
 
 
 @app.post("/api/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request):
     """SSE 流式版：H5 聊天页使用。
 
     事件类型：
@@ -267,17 +291,30 @@ async def chat_stream(req: ChatRequest):
       citation  {items}       引用卡片（search_knowledge 命中的口碑来源；在本轮正文之后统一发）
       need_login {message}    未登录（前端弹登录引导，不算对话错误）
       done      {}            本轮结束
-      error     {message}     出错（如 mall 接口不可用 / LLM 调用失败）
+      error     {message, code}  出错。code 取值见 app/guard.py：
+                               rate_limited / quota_exceeded / budget_exhausted（治理拦截）
+                               llm_timeout / llm_busy / llm_unreachable / mall_unavailable …（调用异常）
     """
-    async def event_stream():
-        try:
-            agent = get_agent()
-        except RuntimeError as e:
-            yield _sse("error", {"message": str(e)})
-            return
+    # IP 在外层取好：Request 对象在响应开始后不保证还能访问，
+    # 别放进 async generator 里用
+    client_ip = guard.ip_of(request)
 
+    async def event_stream():
         session_id = req.session_id or "default"
         member_id = resolve_member_id(req.token)   # M1：会话/草稿归属绑定会员
+
+        # M4 治理门禁：超限回 error 事件（而不是断流）——前端已有 error 分支，
+        # 零改动即可展示；code 字段留给将来做差异化 UI
+        decision = guard.check(client_ip, member_id)
+        if not decision.allowed:
+            yield _sse("error", decision.as_event())
+            return
+
+        try:
+            agent = get_agent(degraded=decision.degraded)
+        except RuntimeError as e:
+            yield _sse("error", {"message": str(e), "code": "llm_unconfigured"})
+            return
         # 读路径：分级装配（可能被压缩），只读；n_stored 供写路径算"本轮新增"
         sent, n_stored = sessions.assemble_history(session_id, member_id, _incoming(req))
         summarize.maybe_schedule(session_id, member_id)   # T3：惰性异步压摘要，不阻塞本轮
@@ -286,6 +323,7 @@ async def chat_stream(req: ChatRequest):
         tok_ctx = current_token.set(req.token or None)
         ses_ctx = current_session.set(session_id)
         mem_ctx = current_member.set(member_id)
+        usage = guard.TokenUsageCollector()          # M4：本轮 token 计量（含多次 LLM 调用）
         try:
             full_reply = ""
             # 本轮搜索累计的商品 id → 原始数据。卡片只展示 show_products 认可的商品，
@@ -296,7 +334,11 @@ async def chat_stream(req: ChatRequest):
             # values 流：每个节点执行后的完整状态，最后一帧含全部消息（含工具消息），
             # 用它覆盖会话历史，保证跨轮次上下文完整（「买第一款」依赖工具消息里的 id）
             final_state = None
-            async for mode, chunk in agent.astream({"messages": sent}, stream_mode=["messages", "values"]):
+            async for mode, chunk in agent.astream(
+                    {"messages": sent},
+                    stream_mode=["messages", "values"],
+                    config={"callbacks": [usage]},       # M4：计量本轮所有 LLM 调用
+            ):
                 if mode == "values":
                     final_state = chunk
                     continue
@@ -420,8 +462,12 @@ async def chat_stream(req: ChatRequest):
                 "return_to": "/chat",
             })
         except Exception as e:  # noqa: BLE001 —— 流式内任何异常都要回给前端而不是断开
-            yield _sse("error", {"message": f"服务出错: {e}"})
+            # M4：面向用户只给友好文案；原始异常（可能含内网地址/连接串/文件路径）只进日志
+            code, message = guard.classify_exception(e)
+            logger.exception("流式对话失败 code=%s", code)
+            yield _sse("error", {"message": message, "code": code})
         finally:
+            guard.record_usage(usage.total)          # M4：累加全站当日 token（失败轮也计）
             current_token.reset(tok_ctx)
             current_session.reset(ses_ctx)
             current_member.reset(mem_ctx)
