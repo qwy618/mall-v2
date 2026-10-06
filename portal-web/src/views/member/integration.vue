@@ -136,12 +136,12 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 40px;
-  background: linear-gradient(135deg, #c0744f 0%, #e0a07d 100%);
+  background: linear-gradient(135deg, #e8752a 0%, #f4a45f 100%);
   border-radius: var(--mall-radius-lg);
   padding: 22px 26px;
   margin-bottom: 16px;
   color: #fff;
-  box-shadow: 0 6px 18px rgba(192, 116, 79, 0.18);
+  box-shadow: 0 6px 18px rgba(232, 117, 42, 0.18);
 }
 .summary__item {
   text-align: center;

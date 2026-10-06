@@ -117,7 +117,7 @@ onMounted(fetchList)
   box-shadow: var(--mall-shadow);
 }
 .fav-card:hover {
-  box-shadow: 0 6px 16px rgba(192, 116, 79, 0.16);
+  box-shadow: 0 6px 16px rgba(232, 117, 42, 0.16);
 }
 .fav-card__pic {
   aspect-ratio: 1 / 1;

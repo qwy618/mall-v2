@@ -532,7 +532,7 @@ onMounted(async () => {
 }
 .addr-card.active {
   border-color: var(--mall-primary);
-  box-shadow: 0 0 0 2px rgba(192, 116, 79, 0.15);
+  box-shadow: 0 0 0 2px rgba(232, 117, 42, 0.15);
 }
 .addr-top {
   display: flex;
@@ -678,7 +678,7 @@ onMounted(async () => {
 }
 .coupon-card.active {
   border-color: var(--mall-primary);
-  box-shadow: 0 0 0 2px rgba(192, 116, 79, 0.15);
+  box-shadow: 0 0 0 2px rgba(232, 117, 42, 0.15);
 }
 .coupon-card.disabled {
   cursor: not-allowed;

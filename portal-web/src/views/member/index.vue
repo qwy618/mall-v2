@@ -197,12 +197,12 @@ interface Tool {
   action: 'coupon' | 'password' | 'address' | 'favorite' | 'return' | 'integration' | 'logout'
 }
 const toolList: Tool[] = [
-  { label: '我的优惠券', icon: Ticket, color: '#c0744f', action: 'coupon' },
+  { label: '我的优惠券', icon: Ticket, color: '#e8752a', action: 'coupon' },
   { label: '积分明细', icon: Coin, color: '#d2a14f', action: 'integration' },
   { label: '修改密码', icon: Lock, color: '#9c7a4d', action: 'password' },
   { label: '收货地址', icon: Location, color: '#7a9c6b', action: 'address' },
   { label: '我的收藏', icon: Star, color: '#d2a14f', action: 'favorite' },
-  { label: '我的售后', icon: RefreshLeft, color: '#c0744f', action: 'return' },
+  { label: '我的售后', icon: RefreshLeft, color: '#e8752a', action: 'return' },
   { label: '退出登录', icon: SwitchButton, color: '#a39488', action: 'logout' },
 ]
 
@@ -274,12 +274,12 @@ onMounted(async () => {
   border-radius: var(--mall-radius-lg);
   overflow: hidden;
   margin-bottom: 16px;
-  box-shadow: 0 6px 18px rgba(192, 116, 79, 0.18);
+  box-shadow: 0 6px 18px rgba(232, 117, 42, 0.18);
 }
 .profile__bg {
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, #c0744f 0%, #e0a07d 100%);
+  background: linear-gradient(135deg, #e8752a 0%, #f4a45f 100%);
 }
 .profile__inner {
   position: relative;
@@ -447,7 +447,7 @@ onMounted(async () => {
 .growth__fill {
   height: 100%;
   border-radius: 4px;
-  background: linear-gradient(90deg, #c0744f 0%, #e0a07d 100%);
+  background: linear-gradient(90deg, #e8752a 0%, #f4a45f 100%);
   transition: width 0.4s ease;
 }
 

@@ -115,7 +115,7 @@ onMounted(fetchList)
   transition: box-shadow 0.2s;
 }
 .apply-card:hover {
-  box-shadow: 0 6px 18px rgba(192, 116, 79, 0.16);
+  box-shadow: 0 6px 18px rgba(232, 117, 42, 0.16);
 }
 .a-top {
   display: flex;

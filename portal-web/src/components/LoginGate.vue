@@ -67,7 +67,7 @@ function goLogin() {
   justify-content: center;
   color: #fff;
   background: var(--mall-primary-gradient);
-  box-shadow: 0 6px 16px rgba(192, 116, 79, 0.32);
+  box-shadow: 0 6px 16px rgba(232, 117, 42, 0.32);
 }
 .lg__title {
   margin: 0 0 8px;
@@ -111,7 +111,7 @@ function goLogin() {
 .lg__btn--primary {
   background: var(--mall-primary-gradient);
   color: #fff;
-  box-shadow: 0 6px 14px rgba(192, 116, 79, 0.3);
+  box-shadow: 0 6px 14px rgba(232, 117, 42, 0.3);
 }
 .lg__btn--primary:hover {
   filter: brightness(1.05);

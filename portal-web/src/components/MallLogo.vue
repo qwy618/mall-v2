@@ -58,13 +58,19 @@ withDefaults(defineProps<{ size?: number }>(), { size: 36 })
   display: inline-flex;
   align-items: center;
   gap: 0.24em;
-  color: var(--mall-logo-color, #ef7c26);
+  /* 品牌标记色统一走 global.css 的 --mall-logo（定稿 Logo 自身的橙）。
+     原先这里读的是 --mall-logo-color，与 global.css 里的变量名不一致 →
+     变量名改成同一个，改色只需动 global.css 一行。 */
+  color: var(--mall-logo);
   line-height: 1;
 }
 .mall-logo__mark {
   display: block;
   flex: none;
   overflow: visible; /* 提手描边贴边，别被 viewBox 裁掉 */
+  /* 袋身的墨迹左边缘在 viewBox 里留了 2/56 的空白（约 1.2px @36px），
+     补回来才能和下方分区的左基线对齐，看起来才像「长在版心里」 */
+  margin-left: -1px;
 }
 .mall-logo__mark text {
   fill: #fff;

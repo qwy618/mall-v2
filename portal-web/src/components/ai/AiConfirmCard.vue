@@ -244,7 +244,7 @@ function money(v?: number | null): string {
 .cbtn--primary {
   background: var(--mall-primary-gradient);
   color: #fff;
-  box-shadow: 0 4px 10px rgba(192, 116, 79, 0.28);
+  box-shadow: 0 4px 10px rgba(232, 117, 42, 0.28);
 }
 .cbtn--primary:hover {
   filter: brightness(1.05);

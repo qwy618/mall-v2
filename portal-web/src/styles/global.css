@@ -1,19 +1,23 @@
 :root {
-  /* 品牌主色：暖色生活方式 · 陶土橙 terracotta */
-  --mall-primary: #c0744f;
-  --mall-primary-dark: #a85d3b;
-  --mall-primary-light: #d29376;
-  --mall-primary-soft: #f7e9e1;
-  --mall-primary-gradient: linear-gradient(135deg, #d29376 0%, #c0744f 100%);
+  /* 品牌橙：全站只有一个橙 —— 取自定稿 Logo（#ef7c26）的同色相。
+   * 主色比 Logo 自身的橙略深一档（#e8752a），因为 UI 里它要跑 1px 描边和 13px 小字，
+   * 太亮会发飘、白字对比度也更差；Logo 本体仍用它的原色（见 --mall-logo）。
+   * 🔴 改品牌色只改这一组变量 + --mall-logo，别在组件里写死色值。
+   */
+  --mall-primary: #e8752a;
+  --mall-primary-dark: #cf6519;
+  --mall-primary-light: #f2a05c;
+  --mall-primary-soft: #fdeee1;
+  --mall-primary-gradient: linear-gradient(135deg, #f4a45f 0%, #e8752a 100%);
 
-  /* Element Plus 主色派生（陶土橙色阶，保证 hover/active 一致） */
-  --el-color-primary: #c0744f;
-  --el-color-primary-light-3: #cd8a6b;
-  --el-color-primary-light-5: #dba98a;
-  --el-color-primary-light-7: #edd2c2;
-  --el-color-primary-light-8: #f3ded3;
-  --el-color-primary-light-9: #f9ece5;
-  --el-color-primary-dark-2: #a85d3b;
+  /* Element Plus 主色派生（同色相橙阶，保证 hover/active 与品牌一致） */
+  --el-color-primary: #e8752a;
+  --el-color-primary-light-3: #ee9059;
+  --el-color-primary-light-5: #f3ab80;
+  --el-color-primary-light-7: #f8cdb0;
+  --el-color-primary-light-8: #fbdcc8;
+  --el-color-primary-light-9: #fdeee1;
+  --el-color-primary-dark-2: #cf6519;
 
   /* 中性：暖米灰阶 */
   --mall-bg: #faf5ef;
@@ -25,15 +29,15 @@
   /* 商品图"舞台底色"：白底商品图 multiply 混合后白底融入此色，避免死白留白 */
   --mall-stage: #f7ece0;
 
-  /* 价格 / 强调：暖陶土（D 风价格走暖色，不抢红色） */
-  --mall-price: #b5633f;
+  /* 价格：比品牌橙再红一档，价格从一屏的橙色里能自己跳出来（不抢纯红） */
+  --mall-price: #d9631a;
 
   /* 圆角：柔和暖感（非 999 大圆角，保留商城辨识度） */
   --mall-radius-sm: 6px;
   --mall-radius: 10px;
   --mall-radius-lg: 14px;
   --mall-shadow: 0 4px 16px rgba(168, 130, 100, 0.08);
-  --mall-shadow-hover: 0 8px 24px rgba(192, 116, 79, 0.16);
+  --mall-shadow-hover: 0 8px 24px rgba(232, 117, 42, 0.16);
 
   /* 字体：正文无衬线，标题衬线（中文宋/思源宋/系统宋，fallback 到 serif） */
   --mall-font-sans: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
@@ -41,7 +45,8 @@
   /* 品牌标记专用：定稿 Logo 是粗圆黑体，字标与袋内「商」共用这一族 */
   --mall-font-logo: 'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
 
-  /* 品牌标记色：取自定稿 Logo 自身的橙（比 --mall-primary 更亮更暖，只用于标记） */
+  /* 品牌标记色：定稿 Logo 自身的橙（比 UI 主色亮一档，只用于标记；
+   * MallLogo.vue 读的就是这个变量，改标记色改这一行） */
   --mall-logo: #ef7c26;
 }
 
@@ -159,7 +164,7 @@ a:hover {
   background: var(--mall-primary);
   border-color: var(--mall-primary);
   font-weight: 700;
-  box-shadow: 0 3px 8px rgba(192, 116, 79, 0.28);
+  box-shadow: 0 3px 8px rgba(232, 117, 42, 0.28);
 }
 .el-pagination .el-pager li.is-active:hover {
   color: #fff;
