@@ -12,8 +12,9 @@
 import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, Close, Delete, Promotion } from '@element-plus/icons-vue'
+import { Close, Delete, Promotion } from '@element-plus/icons-vue'
 import AiBubble from './AiBubble.vue'
+import AssistantBellIcon from './AssistantBellIcon.vue'
 import { clearChatSession, streamChat } from '@/apis/ai'
 import { useLoginGate } from '@/stores/loginGate'
 import { useUserStore } from '@/stores/user'
@@ -24,7 +25,11 @@ const router = useRouter()
 const userStore = useUserStore()
 const gate = useLoginGate()
 
-const open = ref(false)
+/**
+ * 面板展开态：由父级 App.vue 的导航栏按钮与移动端悬浮球共同驱动，
+ * 故提升为 v-model:open（父级未绑定时退化为组件内本地状态，仍可独立工作）。
+ */
+const open = defineModel<boolean>('open', { default: false })
 const draft = ref('')
 const sending = ref(false)
 const msgs = ref<AiMsg[]>([])
@@ -250,10 +255,9 @@ onBeforeUnmount(() => ctrl?.abort())
 
 <template>
   <div class="ai">
-    <!-- 悬浮球 -->
+    <!-- 悬浮球：仅移动端显示（桌面端入口在顶部导航栏购物车左侧） -->
     <button v-show="!open" class="ai__fab" type="button" title="购物助手" @click="toggle">
-      <el-icon :size="22"><ChatDotRound /></el-icon>
-      <span class="ai__fab-tag">助手</span>
+      <AssistantBellIcon :size="24" />
     </button>
 
     <!-- 对话面板 -->
@@ -317,19 +321,20 @@ onBeforeUnmount(() => ctrl?.abort())
 </template>
 
 <style scoped>
+/* 悬浮球：桌面端入口已移入导航栏（购物车左侧），这里只在移动端兜底 */
 .ai__fab {
   position: fixed;
-  right: 28px;
-  bottom: 28px;
+  right: 16px;
+  bottom: 16px;
   z-index: 2000;
-  width: 56px;
-  height: 56px;
+  width: 52px;
+  height: 52px;
   border: none;
   border-radius: 50%;
   background: var(--mall-primary-gradient);
   color: #fff;
   cursor: pointer;
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   box-shadow: 0 8px 22px rgba(192, 116, 79, 0.4);
@@ -339,27 +344,15 @@ onBeforeUnmount(() => ctrl?.abort())
   transform: translateY(-2px);
   box-shadow: 0 12px 28px rgba(192, 116, 79, 0.46);
 }
-.ai__fab-tag {
-  position: absolute;
-  right: 60px;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--mall-primary-dark);
-  background: var(--mall-card);
-  border: 1px solid var(--mall-border);
-  border-radius: var(--mall-radius-sm);
-  padding: 2px 8px;
-  box-shadow: var(--mall-shadow);
-}
 
 .ai__panel {
   position: fixed;
   right: 28px;
-  bottom: 28px;
+  top: 122px;
   z-index: 2001;
   width: 384px;
   height: 580px;
-  max-height: calc(100vh - 56px);
+  max-height: calc(100vh - 150px);
   display: flex;
   flex-direction: column;
   background: var(--mall-bg);
@@ -552,15 +545,10 @@ onBeforeUnmount(() => ctrl?.abort())
 /* 移动端：全屏面板 */
 @media (max-width: 768px) {
   .ai__fab {
-    right: 16px;
-    bottom: 16px;
-    width: 50px;
-    height: 50px;
-  }
-  .ai__fab-tag {
-    display: none;
+    display: flex;
   }
   .ai__panel {
+    top: 0;
     right: 0;
     bottom: 0;
     width: 100%;

@@ -46,13 +46,26 @@
             </button>
           </div>
 
-          <router-link to="/cart" class="cart-btn">
-            <el-badge :value="cartCount" :max="99" :hidden="cartCount === 0">
-              <span class="cart-btn__inner">
-                <el-icon :size="16"><ShoppingCart /></el-icon>购物车
-              </span>
-            </el-badge>
-          </router-link>
+          <div class="header__actions">
+            <button
+              class="assistant-btn"
+              :class="{ 'is-open': assistantOpen }"
+              type="button"
+              :title="assistantOpen ? '收起购物助手' : '打开购物助手'"
+              @click="assistantOpen = !assistantOpen"
+            >
+              <AssistantBellIcon :size="16" />
+              <span class="assistant-btn__text">助手</span>
+            </button>
+
+            <router-link to="/cart" class="cart-btn">
+              <el-badge :value="cartCount" :max="99" :hidden="cartCount === 0">
+                <span class="cart-btn__inner">
+                  <el-icon :size="16"><ShoppingCart /></el-icon>购物车
+                </span>
+              </el-badge>
+            </router-link>
+          </div>
         </div>
       </div>
     </header>
@@ -64,8 +77,8 @@
     <!-- 登录引导弹窗：需登录页面/操作不再硬跳登录页，改为弹窗引导 -->
     <LoginGate />
 
-    <!-- 智能购物助手：右下悬浮球 + 对话面板（登录/注册页不出现） -->
-    <AiAssistant v-if="!route.meta.hideHeader" />
+    <!-- 智能购物助手：桌面端入口在导航栏购物车左侧，移动端为右下悬浮球（登录/注册页不出现） -->
+    <AiAssistant v-if="!route.meta.hideHeader" v-model:open="assistantOpen" />
   </div>
 </template>
 
@@ -78,6 +91,7 @@ import { listCart } from '@/apis/cart'
 import { guestCartCount } from '@/utils/guestCart'
 import LoginGate from '@/components/LoginGate.vue'
 import AiAssistant from '@/components/ai/AiAssistant.vue'
+import AssistantBellIcon from '@/components/ai/AssistantBellIcon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -85,6 +99,8 @@ const userStore = useUserStore()
 
 const keyword = ref('')
 const cartCount = ref(0)
+/** 购物助手面板展开态：导航栏按钮与面板内「收起」共用（面板移动端由悬浮球驱动） */
+const assistantOpen = ref(false)
 
 // 顶栏搜索框与路由 keyword 双向同步：
 // - 在搜索结果页(/search)时，回显当前关键词；
@@ -256,9 +272,59 @@ watch(
   background: var(--mall-primary-dark);
 }
 
-.cart-btn {
+/* 顶栏右侧动作区：助手 + 购物车（整体靠右） */
+.header__actions {
   flex-shrink: 0;
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.assistant-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--mall-primary);
+  color: var(--mall-primary);
+  border-radius: var(--mall-radius);
+  font-size: 13px;
+  background: #fff;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+.assistant-btn:hover {
+  background: var(--mall-primary-soft);
+}
+/* 面板展开时转为实心：与描边购物车形成主次，也便于一眼看出助手是开着的 */
+.assistant-btn.is-open {
+  background: var(--mall-primary);
+  border-color: var(--mall-primary);
+  color: #fff;
+}
+/* 打开时铃以底盘为轴摆一下 —— 呼应「按铃叫人」的动作 */
+.assistant-btn.is-open .assistant-bell {
+  transform-origin: 50% 74%;
+  animation: assist-ring 0.5s ease-in-out;
+}
+@keyframes assist-ring {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  30% {
+    transform: rotate(-9deg);
+  }
+  70% {
+    transform: rotate(9deg);
+  }
+}
+
+.cart-btn {
+  flex-shrink: 0;
 }
 .cart-btn__inner {
   display: inline-flex;
@@ -278,5 +344,12 @@ watch(
 
 .content {
   min-height: calc(100vh - 110px);
+}
+
+/* 窄屏：导航栏空间紧张，助手入口让位给右下悬浮球（见 AiAssistant.vue） */
+@media (max-width: 768px) {
+  .assistant-btn {
+    display: none;
+  }
 }
 </style>
