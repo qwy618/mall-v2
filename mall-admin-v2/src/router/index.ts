@@ -80,7 +80,7 @@ const routes: RouteRecordRaw[] = [
         path: 'return',
         name: 'OrderReturn',
         component: () => import('@/views/return/index.vue'),
-        meta: { title: '售后管理', icon: 'Refund', roles: ['admin', 'product'] },
+        meta: { title: '售后管理', icon: 'Service', roles: ['admin', 'product'] },
       },
     ],
   },

@@ -28,7 +28,7 @@
     <!-- 主表格 -->
     <el-table :data="list" v-loading="loading" border>
       <el-table-column prop="id" label="售后ID" width="90" />
-      <el-table-column prop="orderSn" label="订单号" width="190" />
+      <el-table-column prop="orderSn" label="订单号" min-width="190" />
       <el-table-column prop="memberId" label="会员ID" width="90" />
       <el-table-column label="退款金额" width="120">
         <template #default="{ row }">¥{{ formatMoney(row.returnAmount) }}</template>
@@ -38,7 +38,7 @@
           <el-tag :type="RETURN_STATUS_TAG[row.status]">{{ RETURN_STATUS_TEXT[row.status] }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="createTime" label="申请时间" width="180" />
+      <el-table-column prop="createTime" label="申请时间" min-width="180" />
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
           <el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button>
