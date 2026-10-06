@@ -21,3 +21,6 @@ __pycache__/
 *.log
 *.rdb
 test_unauth.json
+
+# RAG 运行期数据：fastembed 模型缓存（~91MB）等，不入库
+data/

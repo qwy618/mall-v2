@@ -582,3 +582,47 @@ def recall_result(draft_id: str) -> int | None:
         return int(v) if v is not None else None
     except (TypeError, ValueError):
         return None
+
+
+# ---------------------------------------------------------------- RAG 索引（M3）
+
+# 索引元数据：仅运维可见（"索引新不新"），**绝不向用户暴露索引时间**（M3 §5.4）
+RAG_META_TTL = 30 * 24 * 3600   # 30 天：只是诊断信息，重建时会刷新
+
+
+def _k_rag_meta() -> str:
+    return "ai:rag:meta"
+
+
+def _k_rag_lock() -> str:
+    return "ai:rag:lock"
+
+
+def save_rag_meta(meta: dict) -> None:
+    """写索引元数据（Hash）。字段值统一转字符串，读取时由调用方还原类型。"""
+    key = _k_rag_meta()
+    client().hset(key, mapping={k: str(v) for k, v in meta.items()})
+    client().expire(key, RAG_META_TTL)
+
+
+def load_rag_meta() -> dict:
+    """读索引元数据；不存在返回空 dict（调用方据此判定"索引缺失"）。"""
+    raw = client().hgetall(_k_rag_meta())
+    return {k.decode() if isinstance(k, bytes) else k:
+            v.decode() if isinstance(v, bytes) else v
+            for k, v in (raw or {}).items()}
+
+
+def acquire_rag_lock(token: str, ttl: int | None = None) -> bool:
+    """抢索引构建的单飞锁（与 M1.5 摘要单飞同款）——多 worker 只有一个真正重建。"""
+    return bool(client().set(_k_rag_lock(), token, nx=True,
+                             ex=ttl or config.RAG_LOCK_TTL))
+
+
+def release_rag_lock(token: str) -> None:
+    client().eval(_LOCK_RELEASE_LUA, 1, _k_rag_lock(), token)
+
+
+def peek_rag_lock() -> bool:
+    """锁是否被持有（`--check` 用；不参与判断，只做诊断）。"""
+    return bool(client().exists(_k_rag_lock()))

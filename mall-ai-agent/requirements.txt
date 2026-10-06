@@ -7,3 +7,8 @@ httpx
 python-dotenv
 sse-starlette
 redis>=5
+
+# RAG（M3）
+fastembed>=0.4          # ONNX 本地 embedding（BAAI/bge-small-zh-v1.5），不引 PyTorch
+qdrant-client>=1.9      # 向量库客户端（Qdrant server 模式 → 跨 worker 共享，见 M1「2 worker 不串会话」）
+apscheduler>=3.10       # 定时增量索引（不想引入也可用系统 cron 调脚本）

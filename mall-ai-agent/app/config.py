@@ -53,3 +53,51 @@ SESSION_MAX_ROUNDS = int(os.getenv("SESSION_MAX_ROUNDS", "300"))
 SESSION_MAX_BYTES = int(os.getenv("SESSION_MAX_BYTES", str(2 * 1024 * 1024)))
 #   兼容旧配置名：语义已变（由"总条数上限"→"热区上限"），保留以免旧 .env 报错
 SESSION_MAX_MESSAGES = int(os.getenv("SESSION_MAX_MESSAGES", "48"))
+
+# ---------------------------------------------------------------- RAG（M3）
+#
+# 分工铁律：**结构类问题（价格/库存/规格/有没有货）走工具实时查，语义类问题
+# （口碑/手感/适用场景）走 RAG**。所以向量库里永不出现价格/库存——快照必然过期，
+# 检索到过期价即幻觉。详见 docs/M3_RAG检索增强设计.md §4.4。
+#
+# 开关：置 0 时 search_knowledge 直接返回"暂无信息"，用于一键回退（索引挂了也不影响其余工具）
+RAG_ENABLED = os.getenv("RAG_ENABLED", "1").lower() not in ("0", "false", "no")
+
+RAG_COLLECTION = os.getenv("RAG_COLLECTION", "mall_knowledge")
+# Qdrant 走 server 模式（独立进程）：多 worker 查同一份数据，
+# 不用"进程内/本地文件"型向量库（那会和 M1 前的内存 dict 一样各存一份 → 串会话）
+#   默认指向中间件主机（与 Redis/RabbitMQ 同一台），容器名为 qdrant
+QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.150.128:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
+
+# Embedding：DeepSeek 只提供 chat/completions，没有 embeddings 端点 → 必须外部解决。
+# fastembed 走 ONNX 运行时（不引 PyTorch，~91MB 模型），封在 embedder 单一接口后可切第三方。
+EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "fastembed")     # fastembed | dashscope
+EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-small-zh-v1.5")
+EMBED_DIM = int(os.getenv("EMBED_DIM", "512"))
+EMBED_CACHE_DIR = os.getenv("EMBED_CACHE_DIR", "./data/fastembed")
+
+# 检索
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
+#   阈值按 M3.5 金标集（28 条，19 正 / 6 越界）复标，见 eval/baseline.json：
+#   越界样本最高 0.4560，正样本最低 0.5022 → 安全区间 (0.4560, 0.5022]，
+#   取两侧最小余量最大化的中值 0.48（下 0.0240 / 上 0.0222）。
+#   旧值 0.46 距越界样本仅 0.0040，一次 embedding 抖动就会漏放 → 已弃用。
+#   🔴 注意：embedding 在本语料上区分度窄（两个边界只差 0.046），
+#   阈值天然脆弱，真正的改善要靠换更好的 embedding 或开 rerank（docs/M3 §10 R5）。
+RAG_SIM_THRESHOLD = float(os.getenv("RAG_SIM_THRESHOLD", "0.48"))
+RAG_MAX_PER_PRODUCT = int(os.getenv("RAG_MAX_PER_PRODUCT", "1"))
+RAG_FETCH_MULTIPLIER = int(os.getenv("RAG_FETCH_MULTIPLIER", "3"))
+RAG_RERANK = os.getenv("RAG_RERANK", "0").lower() not in ("0", "false", "no")
+
+# 索引
+RAG_INDEX_CRON = os.getenv("RAG_INDEX_CRON", "0 3 * * *")
+RAG_INDEX_ON_START = os.getenv("RAG_INDEX_ON_START", "0").lower() not in ("0", "false", "no")
+#   生成 review_summary 所需的最少有效评价数
+RAG_MIN_REVIEWS = int(os.getenv("RAG_MIN_REVIEWS", "1"))
+RAG_AGG_MAX_INPUT_TOKENS = int(os.getenv("RAG_AGG_MAX_INPUT_TOKENS", "2000"))
+RAG_INDEX_BATCH = int(os.getenv("RAG_INDEX_BATCH", "32"))
+#   脏数据商品名（实测库里存在 "test"/"xxx"）——不进索引
+RAG_SKIP_NAME_PATTERN = os.getenv("RAG_SKIP_NAME_PATTERN", r"^(test|xxx|\d+)$")
+#   单飞锁 TTL（秒）：多 worker 下只允许一个实例真正重建
+RAG_LOCK_TTL = int(os.getenv("RAG_LOCK_TTL", "300"))
