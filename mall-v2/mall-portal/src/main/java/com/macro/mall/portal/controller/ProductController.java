@@ -12,6 +12,7 @@ import com.macro.mall.portal.search.EsProductService;
 import com.macro.mall.portal.search.EsSearchResult;
 import com.macro.mall.portal.vo.ProductDetailVO;
 import com.macro.mall.portal.vo.ProductVO;
+import com.macro.mall.service.ProductAttributeService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,6 +37,13 @@ public class ProductController {
 
     @Autowired
     private SkuMapper skuMapper;
+
+    /**
+     * 跨端属性能力（mall-service，债务1）：商品参数 + 规格选项。
+     * C 端只读——规格值由管理端保存 SKU 时从 sp_data 同步过来。
+     */
+    @Autowired
+    private ProductAttributeService productAttributeService;
 
     /**
      * 商品列表：分页 + 关键词（按名称）筛选，按 id 倒序，附 SKU 最低价
@@ -129,6 +137,10 @@ public class ProductController {
         ProductDetailVO vo = new ProductDetailVO();
         vo.setProduct(ProductVO.from(product, lowestPrice));
         vo.setSkus(skus);
+        // 债务1：商品参数（type=1，仅展示）与规格选项（type=0，按属性名分组的可选值）。
+        // 都是空列表兜底，前端按"有数据才渲染"处理，老商品不会因为没配属性而报错。
+        vo.setAttributes(productAttributeService.listProductParams(id));
+        vo.setSpecOptions(productAttributeService.listSpecOptions(id));
         return CommonResult.success(vo);
     }
 
