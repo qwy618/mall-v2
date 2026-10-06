@@ -8,6 +8,7 @@ import AiProductCard from './AiProductCard.vue'
 import AiConfirmCard from './AiConfirmCard.vue'
 import AiCitationCard from './AiCitationCard.vue'
 import PicBox from '@/components/PicBox.vue'
+import { AI_AVATAR } from './persona'
 import type { AiCitation, AiConfirm, AiMsg, AiProduct } from '@/types/ai'
 
 const props = defineProps<{
@@ -80,6 +81,7 @@ function userText(): string {
     v-if="msg.role === 'user' || hasContent || msg.streaming"
     class="bubble"
     :class="[`bubble--${msg.role}`, { 'bubble--error': msg.error }]"
+    :style="{ '--ai-avatar-char': `'${AI_AVATAR}'` }"
   >
     <!-- 用户消息 -->
     <template v-if="msg.role === 'user'">
@@ -208,9 +210,11 @@ function userText(): string {
   grid-column: 2;
   min-width: 0;
 }
-/* 头像：跨越所有行，只出现在第一行左侧 */
+/* 头像：跨越所有行，只出现在第一行左侧。
+   头像字走 CSS 变量（persona.ts 注入），改名不会漏掉这一处；
+   字族用品牌标记那套粗黑体 —— 与头部 Logo 同源，中文字形也比衬线清楚。 */
 .bubble--assistant::before {
-  content: 'M';
+  content: var(--ai-avatar-char, '满');
   grid-column: 1;
   grid-row: 1;
   width: 26px;
@@ -218,9 +222,9 @@ function userText(): string {
   border-radius: 50%;
   background: var(--mall-primary-gradient);
   color: #fff;
-  font-family: var(--mall-font-serif);
+  font-family: var(--mall-font-logo);
   font-weight: 800;
-  font-size: 13px;
+  font-size: 14px;
   display: flex;
   align-items: center;
   justify-content: center;

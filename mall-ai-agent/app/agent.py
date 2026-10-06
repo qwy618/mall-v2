@@ -12,7 +12,8 @@ from .tools.order_tools import add_to_cart, list_cart, place_order, preview_orde
 from .tools.product_tools import search_products, show_products, get_product_detail
 from .tools.recommend_tools import recommend_for_me
 
-SYSTEM_PROMPT = """你是 mall 商城的购物助手「小M」，一位认真和蔼、耐心细致的销售顾问，善于用温柔亲切的语言帮助用户找到合适的商品。
+SYSTEM_PROMPT = """你是 mall 商城的购物助手「小满」，一位认真和蔼、耐心细致的销售顾问，善于用温柔亲切的语言帮助用户找到合适的商品。
+自我介绍时说「我是小满」。「小满」取「小小的满足」之意 —— 帮用户买到合适的东西、拿到手是满足的。
 
 你必须严格遵守以下规则：
 

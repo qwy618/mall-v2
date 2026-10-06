@@ -15,6 +15,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, Close, Delete, Promotion } from '@element-plus/icons-vue'
 import AiBubble from './AiBubble.vue'
 import AssistantBellIcon from './AssistantBellIcon.vue'
+import { AI_AVATAR, AI_INTRO, AI_NAME, AI_ROLE } from './persona'
 import { clearChatSession, streamChat } from '@/apis/ai'
 import { useLoginGate } from '@/stores/loginGate'
 import { useUserStore } from '@/stores/user'
@@ -346,10 +347,10 @@ onBeforeUnmount(() => ctrl?.abort())
     <transition name="ai-slide">
       <section v-if="open" class="ai__panel">
         <header class="ai__head">
-          <span class="ai__avatar">M</span>
+          <span class="ai__avatar">{{ AI_AVATAR }}</span>
           <div class="ai__head-txt">
-            <p class="ai__name">小 M · 购物助手</p>
-            <p class="ai__sub">帮你找商品、加购物车、下单</p>
+            <p class="ai__name">{{ AI_NAME }} · {{ AI_ROLE }}</p>
+            <p class="ai__sub">{{ AI_INTRO }}</p>
           </div>
           <div class="ai__head-btns">
             <button type="button" title="开启新会话" @click="clearAll">
@@ -364,8 +365,8 @@ onBeforeUnmount(() => ctrl?.abort())
         <div ref="bodyEl" class="ai__body" :class="{ 'ai__body--empty': msgs.length === 0 }">
           <!-- 空态：能力引导页（比「一行欢迎语 + 几个小按钮」更容易知道能问什么） -->
           <div v-if="msgs.length === 0" class="ai__welcome">
-            <span class="ai__welcome-avatar">M</span>
-            <p class="ai__hello">你好，我是小 M</p>
+            <span class="ai__welcome-avatar">{{ AI_AVATAR }}</span>
+            <p class="ai__hello">你好，我是{{ AI_NAME }}</p>
             <p class="ai__hello-sub">帮你挑商品、加入购物车，也能直接下单。<br />试试下面这些：</p>
             <div class="ai__cards">
               <button v-for="q in quickCards" :key="q" class="ai__card" type="button" @click="onQuick(q)">
@@ -440,12 +441,12 @@ onBeforeUnmount(() => ctrl?.abort())
   display: none;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 8px 22px rgba(192, 116, 79, 0.4);
+  box-shadow: 0 8px 22px rgba(232, 117, 42, 0.4);
   transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 .ai__fab:hover {
   transform: translateY(-2px);
-  box-shadow: 0 12px 28px rgba(192, 116, 79, 0.46);
+  box-shadow: 0 12px 28px rgba(232, 117, 42, 0.46);
 }
 
 .ai__panel {
@@ -481,8 +482,9 @@ onBeforeUnmount(() => ctrl?.abort())
   border-radius: 50%;
   background: var(--mall-primary-gradient);
   color: #fff;
+  font-family: var(--mall-font-logo);
   font-weight: 800;
-  font-size: 15px;
+  font-size: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -534,9 +536,16 @@ onBeforeUnmount(() => ctrl?.abort())
   flex-direction: column;
   gap: 14px;
 }
-/* 空态垂直居中：避免「内容贴顶 + 下方一大片空白」 */
+/* 空态垂直居中：避免「内容贴顶 + 下方一大片空白」。
+ * 🔴 用 .ai__welcome 的 margin:auto，不要用容器的 justify-content:center ——
+ *    空态内容比容器高时（窄屏 / 矮窗口），justify-content:center 会把顶部的
+ *    头像和问候语顶出可视区，且滚不回去（scrollHeight > clientHeight，但上滚没有内容）。
+ *    margin:auto 在空间够时居中、不够时自然从顶部开始排，能滚。 */
 .ai__body--empty {
-  justify-content: center;
+  justify-content: flex-start;
+}
+.ai__body--empty .ai__welcome {
+  margin: auto;
 }
 
 /* ---------- 空态：能力引导 ---------- */
@@ -553,13 +562,13 @@ onBeforeUnmount(() => ctrl?.abort())
   border-radius: 50%;
   background: var(--mall-primary-gradient);
   color: #fff;
-  font-family: var(--mall-font-serif);
-  font-size: 25px;
+  font-family: var(--mall-font-logo);
+  font-size: 27px;
   font-weight: 800;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 8px 20px rgba(192, 116, 79, 0.26);
+  box-shadow: 0 8px 20px rgba(232, 117, 42, 0.26);
   margin-bottom: 12px;
 }
 .ai__hello {
@@ -665,7 +674,7 @@ onBeforeUnmount(() => ctrl?.abort())
 }
 .ai__composer:focus-within {
   border-color: var(--mall-primary-light);
-  box-shadow: 0 0 0 3px rgba(192, 116, 79, 0.1);
+  box-shadow: 0 0 0 3px rgba(232, 117, 42, 0.1);
 }
 .ai__input {
   flex: 1;
