@@ -726,6 +726,23 @@ function highlight(text?: string): string {
   return html
 }
 
+/**
+ * ?pid= 是「一次性意图」：点商品卡 / 从收藏进来时带一次，用来打开详情抽屉。
+ *
+ * 🔴 打开后必须立刻把 pid 从地址栏摘掉，否则它会一直留在 URL 里：
+ * 刷新页面时 onMounted 又读到同一个 pid，详情抽屉就自己弹出来了
+ * （用户遇到的就是这个：开过详情 → 刷新 → 详情自己又开了）。
+ * 用 replace 而不是 push，避免在浏览器历史里塞一条脏记录。
+ */
+function consumePidQuery() {
+  const pid = route.query.pid
+  if (typeof pid !== 'string' || !pid) return
+  openDetail(Number(pid))
+  const rest = { ...route.query }
+  delete rest.pid
+  router.replace({ query: rest })
+}
+
 onMounted(() => {
   const q = route.query.keyword
   if (typeof q === 'string' && q.trim()) {
@@ -734,11 +751,8 @@ onMounted(() => {
   fetchCategories()
   fetchBrands()
   fetchList()
-  // 从「我的收藏」点进来：带 pid 直接打开商品详情抽屉
-  const pid = route.query.pid
-  if (typeof pid === 'string' && pid) {
-    openDetail(Number(pid))
-  }
+  // 从「我的收藏」/ 助手商品卡点进来：带 pid 直接打开商品详情抽屉
+  consumePidQuery()
 })
 
 // 顶栏搜索 / 热搜词跳转：query.keyword 变化时同步刷新列表
@@ -752,12 +766,12 @@ watch(
   }
 )
 
-// 从「我的收藏」点进来：query.pid 变化时直接打开对应商品详情
+// 从「我的收藏」/ 助手商品卡点进来：query.pid 变化时直接打开对应商品详情
 watch(
   () => route.query.pid,
   (val) => {
     if (typeof val === 'string' && val) {
-      openDetail(Number(val))
+      consumePidQuery()
     }
   }
 )
