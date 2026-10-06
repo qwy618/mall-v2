@@ -38,6 +38,11 @@
   /* 字体：正文无衬线，标题衬线（中文宋/思源宋/系统宋，fallback 到 serif） */
   --mall-font-sans: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
   --mall-font-serif: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
+  /* 品牌标记专用：定稿 Logo 是粗圆黑体，字标与袋内「商」共用这一族 */
+  --mall-font-logo: 'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+
+  /* 品牌标记色：取自定稿 Logo 自身的橙（比 --mall-primary 更亮更暖，只用于标记） */
+  --mall-logo: #ef7c26;
 }
 
 * {

@@ -29,8 +29,7 @@
       <div class="header__main">
         <div class="header__inner">
           <router-link to="/product" class="logo">
-            <span class="logo__mark">M</span>
-            <span class="logo__text">商城</span>
+            <MallLogo :size="36" />
           </router-link>
 
           <div class="search">
@@ -90,6 +89,7 @@ import { useUserStore } from '@/stores/user'
 import { listCart } from '@/apis/cart'
 import { guestCartCount } from '@/utils/guestCart'
 import LoginGate from '@/components/LoginGate.vue'
+import MallLogo from '@/components/MallLogo.vue'
 import AiAssistant from '@/components/ai/AiAssistant.vue'
 import AssistantBellIcon from '@/components/ai/AssistantBellIcon.vue'
 
@@ -209,27 +209,7 @@ watch(
 .logo {
   display: flex;
   align-items: center;
-  gap: 8px;
   flex-shrink: 0;
-}
-.logo__mark {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--mall-radius-sm);
-  background: var(--mall-primary);
-  color: #fff;
-  font-weight: 800;
-  font-size: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.logo__text {
-  font-family: var(--mall-font-serif);
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--mall-primary);
-  letter-spacing: 3px;
 }
 
 .search {

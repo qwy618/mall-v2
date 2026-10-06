@@ -2,8 +2,7 @@
   <div class="auth">
     <div class="auth__card">
       <div class="auth__brand">
-        <span class="auth__logo">M</span>
-        <span class="auth__title">商城</span>
+        <MallLogo :size="40" />
       </div>
       <h2 class="auth__heading">注册账号</h2>
       <p class="auth__sub">创建账号，开启你的购物之旅</p>
@@ -73,6 +72,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Iphone, Lock, User } from '@element-plus/icons-vue'
 import { register } from '@/apis/member'
+import MallLogo from '@/components/MallLogo.vue'
 
 const router = useRouter()
 const formRef = ref<FormInstance>()
@@ -135,29 +135,7 @@ async function handleRegister() {
 .auth__brand {
   display: flex;
   align-items: center;
-  gap: 10px;
   margin-bottom: 18px;
-}
-
-.auth__logo {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: var(--mall-primary-gradient);
-  color: #fff;
-  font-weight: 800;
-  font-size: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 10px rgba(192, 116, 79, 0.3);
-}
-
-.auth__title {
-  font-size: 22px;
-  font-weight: 800;
-  color: var(--mall-primary);
-  letter-spacing: 1px;
 }
 
 .auth__heading {
