@@ -21,6 +21,7 @@ import com.macro.mall.portal.vo.OrderDetailVO;
 import com.macro.mall.portal.vo.OrderPreviewVO;
 import com.macro.mall.service.MemberLevelService;
 import com.macro.mall.service.MemberPointsService;
+import com.macro.mall.service.SkuStockService;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RAtomicLong;
 import org.redisson.api.RedissonClient;
@@ -69,6 +70,7 @@ public class OrderServiceImpl implements OrderService {
     @Autowired private MemberMapper memberMapper;
     @Autowired private MemberLevelService memberLevelService;
     @Autowired private MemberPointsService memberPointsService;
+    @Autowired private SkuStockService skuStockService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -138,7 +140,7 @@ public class OrderServiceImpl implements OrderService {
         String orderSn = getOrderSn();
 
         // 4. 解析行项目（**只读**：查 SKU/商品、校验购物车归属、算行小计与券适用范围）
-        //    注意：本步骤不再扣库存，扣库存单独抽到 deductStock（见第 6 步），
+        //    注意：本步骤不再动库存，锁定库存单独抽到 lockStock（见第 6 步），
         //    以便 preview 复用「解析 + 算钱」而跳过「扣库存」。
         List<ResolvedItem> rows = resolveItems(memberId, param.getItems(), coupon);
         // 4.1 收集结算后要清理的购物车条目
@@ -153,8 +155,8 @@ public class OrderServiceImpl implements OrderService {
         if (member == null) throw new BusinessException("会员不存在");
         Amounts amounts = computeAmounts(member, rows, coupon, param.getUseIntegration());
 
-        // 6. 原子扣库存（唯一"有副作用"的一步，仅 create 调用）
-        deductStock(rows);
+        // 6. 原子**锁定**库存（唯一"有副作用"的一步，仅 create 调用）：只预占，不动实物库存
+        lockStock(rows);
 
         // 7. 构建订单项（取图口径：优先 SKU 图，SKU 无图回退 SPU 商品图）
         List<OrderItem> items = buildOrderItems(orderSn, rows);
@@ -464,16 +466,34 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * 原子扣库存（**仅 create 调用**）：{@code UPDATE sku SET stock = stock - n WHERE id = ? AND stock >= n}，
-     * 影响行数为 0 即库存不足。preview 绝不调用本方法。
+     * 原子**锁定**库存（**仅 create 调用**，债务 5）：下单只预占，不动实物库存。
+     *
+     * <p>口径：{@code lock_stock = lock_stock + n WHERE id = ? AND stock - lock_stock >= n}
+     * —— 判据是**可售**（stock − lock_stock）而不是总量。preview 绝不调用本方法。
+     *
+     * <p>失败直接抛异常：事务回滚会**连同本次循环里已经锁定成功的行一起回滚**
+     * （同一本地事务），不会留下"锁了一半"的残留 —— 这就是不需要手动补偿的原因。
      */
-    private void deductStock(List<ResolvedItem> rows) {
+    private void lockStock(List<ResolvedItem> rows) {
         for (ResolvedItem r : rows) {
-            int affected = skuMapper.update(null, new LambdaUpdateWrapper<Sku>()
-                    .eq(Sku::getId, r.sku.getId())
-                    .ge(Sku::getStock, r.quantity)
-                    .setSql("stock = stock - " + r.quantity));
-            if (affected == 0) throw new BusinessException("库存不足");
+            if (!skuStockService.lock(r.sku.getId(), r.quantity)) {
+                throw new BusinessException("库存不足");
+            }
+        }
+    }
+
+    /**
+     * 释放某订单占用的锁定库存（取消 / 超时关单共用）。
+     *
+     * <p>**必须**由「订单状态流转成功」的那一个线程调用 —— 独占性靠调用方的原子
+     * 条件更新保证，本方法自身的 {@code lock_stock >= n} 条件只能兜住"减成负数"。
+     * 释放失败只记告警、不抛异常：数据不一致不该阻塞用户取消订单。
+     */
+    private void releaseStock(Long orderId) {
+        List<OrderItem> items = orderItemMapper.selectList(
+                new LambdaQueryWrapper<OrderItem>().eq(OrderItem::getOrderId, orderId));
+        for (OrderItem it : items) {
+            skuStockService.release(it.getSkuId(), it.getQuantity());
         }
     }
 
@@ -525,7 +545,20 @@ public class OrderServiceImpl implements OrderService {
             if (latest != null && latest.getStatus() == 1) throw new BusinessException("订单已支付");
             throw new BusinessException("订单已关闭或不存在");
         }
-        // 3. 写入支付流水（幂等由 uk_order_id 兜底；此分支每个订单仅进入一次）
+        // 3. 支付成功即出库（债务 5）：把下单时的**预占**转为**真实扣减**
+        //    stock -= n, lock_stock -= n —— 注意可售数量在支付前后**不变**（下单时已经减过了），
+        //    所以这里绝不能改成只减 stock，否则同一件商品会被扣两次。
+        //    与本方法的状态流转同事务：这里失败 → status 一起回滚，不会出现
+        //    「已支付但库存没扣」的资损。
+        List<OrderItem> items = orderItemMapper.selectList(
+                new LambdaQueryWrapper<OrderItem>().eq(OrderItem::getOrderId, orderId));
+        for (OrderItem it : items) {
+            if (!skuStockService.consume(it.getSkuId(), it.getQuantity())) {
+                // 订单没有对应的锁定记录 → 数据/流程不一致，抛异常整单回滚并把问题暴露出来
+                throw new BusinessException("库存扣减失败，请联系客服");
+            }
+        }
+        // 4. 写入支付流水（幂等由 uk_order_id 兜底；此分支每个订单仅进入一次）
         Payment p = new Payment();
         p.setOrderId(orderId);
         p.setOrderSn(o.getOrderSn());
@@ -562,19 +595,24 @@ public class OrderServiceImpl implements OrderService {
         Order o = orderMapper.selectById(orderId);
         if (o == null) return CommonResult.failed("订单不存在");
         if (!memberId.equals(o.getMemberId())) return CommonResult.failed("无权操作");
-        if (o.getStatus() != 0) return CommonResult.failed("仅待付款订单可取消");
-        // 还原库存（逐 item 加回 sku.stock）
-        List<OrderItem> items = orderItemMapper.selectList(
-                new LambdaQueryWrapper<OrderItem>().eq(OrderItem::getOrderId, orderId));
-        for (OrderItem it : items) {
-            skuMapper.update(null, new LambdaUpdateWrapper<Sku>()
-                    .eq(Sku::getId, it.getSkuId())
-                    .setSql("stock = stock + " + it.getQuantity()));
+        // 原子条件流转 0→4：并发双击只有一个线程 affected=1，其余拿到 0 直接返回。
+        // 这一步是「释放库存独占」的**前提**：原写法是「selectById 判断 status，
+        // 再 updateById 写」，两个并发请求都会读到 status=0 → 各自释放一次库存
+        // → lock_stock 被减成负数（债务 5 顺手修的既有 bug）。
+        int rows = orderMapper.update(null, new LambdaUpdateWrapper<Order>()
+                .eq(Order::getId, orderId)
+                .eq(Order::getStatus, 0)
+                .set(Order::getStatus, 4)
+                .set(Order::getCloseTime, LocalDateTime.now()));
+        if (rows == 0) {
+            Order latest = orderMapper.selectById(orderId);
+            if (latest == null) return CommonResult.failed("订单不存在");
+            if (latest.getStatus() != 0) return CommonResult.failed("订单状态已变更，请刷新后重试");
+            return CommonResult.failed("取消失败，请稍后重试");
         }
-        o.setStatus(4);
-        o.setCloseTime(LocalDateTime.now());
-        orderMapper.updateById(o);
-        recordHistory(o.getId(), o.getOrderSn(), "会员" + memberId, "CANCEL", "取消订单");
+        // 只有流转成功的线程走到这里 → 独占释放（只解除预占，不动实物库存）
+        releaseStock(orderId);
+        recordHistory(orderId, o.getOrderSn(), "会员" + memberId, "CANCEL", "取消订单");
         return CommonResult.success(orderId);
     }
 
@@ -636,6 +674,10 @@ public class OrderServiceImpl implements OrderService {
     /**
      * 系统触发：超时自动取消（幂等）。仅当订单仍处于待支付(0) 才取消，
      * 已支付/已取消等状态直接跳过，避免误取消已支付订单。
+     *
+     * <p>债务 5 后语义变化：取消只**释放预占**（{@code lock_stock -= n}），不再加回
+     * {@code stock} —— 下单时压根没减过实物库存。实物库存只在支付（consume）与
+     * 作废（restore）两处动。
      */
     @Transactional(rollbackFor = Exception.class)
     public void cancelExpiredBySystem(Long orderId) {
@@ -648,18 +690,11 @@ public class OrderServiceImpl implements OrderService {
 
         if (affected == 0) {
             log.info("订单不存在或状态已变更，跳过: orderId={}", orderId);
-            return;  // 重要：直接返回，不恢复库存
+            return;  // 重要：直接返回，不释放库存（延迟消息重复投递会走到这里）
         }
 
-        // 2. 只有更新成功的线程才恢复库存
-        List<OrderItem> items = orderItemMapper.selectList(
-                new LambdaQueryWrapper<OrderItem>().eq(OrderItem::getOrderId, orderId));
-
-        for (OrderItem it : items) {
-            skuMapper.update(null, new LambdaUpdateWrapper<Sku>()
-                    .eq(Sku::getId, it.getSkuId())
-                    .setSql("stock = stock + " + it.getQuantity()));
-        }
+        // 2. 只有更新成功的线程才释放预占 —— 原子 0→4 保证同一订单只释放一次
+        releaseStock(orderId);
 
         log.info("订单超时取消成功: orderId={}", orderId);
     }

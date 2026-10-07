@@ -25,6 +25,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
 import com.macro.mall.admin.component.AdminUserDetails;
 import com.macro.mall.service.MemberPointsService;
+import com.macro.mall.service.SkuStockService;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -58,6 +59,8 @@ public class OrderServiceImpl implements OrderService {
     private PaymentMapper paymentMapper;
     @Autowired
     private MemberPointsService memberPointsService;
+    @Autowired
+    private SkuStockService skuStockService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -82,13 +85,10 @@ public class OrderServiceImpl implements OrderService {
             if(sku == null){
                 throw new BusinessException("商品不存在");   // ← 抛异常，事务回滚
             }
-            //5.乐观锁扣减商品
-            LambdaUpdateWrapper<Sku> updateWrapper = new LambdaUpdateWrapper<>();
-            updateWrapper.eq(Sku::getId, item.getSkuId())
-                    .ge(Sku::getStock, item.getQuantity())
-                    .setSql("stock = stock - " + item.getQuantity());
-            int update = skuMapper.update(null, updateWrapper);
-            if (update == 0) {
+            //5.原子**锁定**库存（债务5）：后台代客下单与 C 端口径完全一致 —— 只预占，
+            //  判据是**可售**（stock − lock_stock）而不是总量，判断与写入在同一条 SQL 里
+            //  由 InnoDB 行锁保证原子。失败抛异常 → 整单回滚（含本循环已锁成功的行）。
+            if (!skuStockService.lock(item.getSkuId(), item.getQuantity())) {
                 throw new BusinessException("库存不足");
             }
             //6.获取商品
@@ -157,10 +157,22 @@ public class OrderServiceImpl implements OrderService {
     public CommonResult<Long> pay(Long id) {
         Order o = orderMapper.selectById(id);
         if (o == null) return CommonResult.failed("订单不存在");
-        if (o.getStatus() != 0) throw new BusinessException("仅待付款订单可支付");
-        o.setStatus(1);
-        o.setPaymentTime(LocalDateTime.now());
-        orderMapper.updateById(o);
+        // 原子条件流转 0→1：并发/重复点击只有一个线程 affected=1，其余拿到 0 直接拒绝
+        int rows = orderMapper.update(null, new LambdaUpdateWrapper<Order>()
+                .eq(Order::getId, id)
+                .eq(Order::getStatus, 0)
+                .set(Order::getStatus, 1)
+                .set(Order::getPaymentTime, LocalDateTime.now()));
+        if (rows == 0) throw new BusinessException("仅待付款订单可支付");
+        // 支付即出库（债务5）：预占转真实扣减 stock -= n, lock_stock -= n。
+        // 与状态流转同事务 —— 这里失败则 status 一起回滚，不会「已支付但没扣库存」。
+        List<OrderItem> items = orderItemMapper.selectList(
+                new LambdaQueryWrapper<OrderItem>().eq(OrderItem::getOrderId, id));
+        for (OrderItem it : items) {
+            if (!skuStockService.consume(it.getSkuId(), it.getQuantity())) {
+                throw new BusinessException("库存扣减失败，请检查该订单的库存占用记录");
+            }
+        }
         return CommonResult.success(id);
     }
 
@@ -216,13 +228,13 @@ public class OrderServiceImpl implements OrderService {
                 .set(Order::getCloseTime, LocalDateTime.now()));
         if (rows == 0) return CommonResult.failed("仅已付款（未发货）订单可作废");
 
-        // 1. 回滚库存：逐 item 把下单扣掉的 quantity 加回 sku.stock
+        // 1. 回滚**实物**库存（债务5 后语义更清晰）：作废的是「已付款未发货」订单，
+        //    支付阶段已经 consume 过（stock -= n），而货并没有真的发出去 → 加回 stock。
+        //    注意与「取消」的区别：取消针对待付款单，只释放 lock_stock，不动实物库存。
         List<OrderItem> items = orderItemMapper.selectList(
                 new LambdaQueryWrapper<OrderItem>().eq(OrderItem::getOrderId, id));
         for (OrderItem item : items) {
-            skuMapper.update(null, new LambdaUpdateWrapper<Sku>()
-                    .eq(Sku::getId, item.getSkuId())
-                    .setSql("stock = stock + " + item.getQuantity()));
+            skuStockService.restore(item.getSkuId(), item.getQuantity());
         }
 
         // 2. 退回优惠券：把本单核销的记录改回未使用，会员可再次使用
@@ -258,18 +270,21 @@ public class OrderServiceImpl implements OrderService {
     public CommonResult<Long> cancel(Long id) {
         Order o = orderMapper.selectById(id);
         if (o == null) return CommonResult.failed("订单不存在");
-        if (o.getStatus() != 0) return CommonResult.failed("仅待付款订单可取消");
-        // 还原库存：逐 item 把下单扣的 quantity 加回 sku.stock
+        // 原子条件流转 0→4：并发/重复点击只有一个线程 affected=1。
+        // 这是「释放库存独占」的前提：原写法「selectById 判断 + updateById 写」会让
+        // 两个并发请求各读到 status=0 → 各释放一次 → lock_stock 被减成负数（债务5 修的 bug）。
+        int rows = orderMapper.update(null, new LambdaUpdateWrapper<Order>()
+                .eq(Order::getId, id)
+                .eq(Order::getStatus, 0)
+                .set(Order::getStatus, 4)
+                .set(Order::getCloseTime, LocalDateTime.now()));
+        if (rows == 0) return CommonResult.failed("仅待付款订单可取消");
+        // 只释放预占（lock_stock -= n）：下单时没减过实物库存，所以不加回 stock
         List<OrderItem> items = orderItemMapper.selectList(
                 new LambdaQueryWrapper<OrderItem>().eq(OrderItem::getOrderId, id));
         for (OrderItem item : items) {
-            skuMapper.update(null, new LambdaUpdateWrapper<Sku>()
-                    .eq(Sku::getId, item.getSkuId())
-                    .setSql("stock = stock + " + item.getQuantity()));
+            skuStockService.release(item.getSkuId(), item.getQuantity());
         }
-        o.setStatus(4);
-        o.setCloseTime(LocalDateTime.now());
-        orderMapper.updateById(o);
         recordHistory(o.getId(), o.getOrderSn(), currentAdmin(), "CANCEL", "取消订单");
         return CommonResult.success(id);
     }

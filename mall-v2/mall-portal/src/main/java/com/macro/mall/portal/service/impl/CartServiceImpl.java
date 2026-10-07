@@ -14,6 +14,7 @@ import com.macro.mall.mbg.model.Sku;
 import com.macro.mall.portal.dao.CartMergeParam;
 import com.macro.mall.portal.service.CartService;
 import com.macro.mall.portal.vo.CartItemVO;
+import com.macro.mall.service.SkuStockService;
 import org.redisson.api.RBucket;
 import org.redisson.api.RMap;
 import org.redisson.api.RedissonClient;
@@ -39,17 +40,20 @@ public class CartServiceImpl implements CartService {
     private final ProductMapper productMapper;
     private final RedissonClient redisson;
     private final ObjectMapper objectMapper;
+    private final SkuStockService skuStockService;
 
     public CartServiceImpl(CartItemMapper cartItemMapper,
                            SkuMapper skuMapper,
                            ProductMapper productMapper,
                            RedissonClient redisson,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           SkuStockService skuStockService) {
         this.cartItemMapper = cartItemMapper;
         this.skuMapper = skuMapper;
         this.productMapper = productMapper;
         this.redisson = redisson;
         this.objectMapper = objectMapper;
+        this.skuStockService = skuStockService;
     }
 
     // ===== 购物车 Redis 缓存（债务17）：Hash 存原始行 + 写后失效 + 空值防穿透 =====
@@ -164,7 +168,9 @@ public class CartServiceImpl implements CartService {
             vo.setPic(resolvePic(sku, p, it.getPic()));
             vo.setSpData(it.getSpData());
             vo.setPrice(online ? sku.getPrice() : it.getPrice());
-            vo.setStock(online ? sku.getStock() : 0);
+            // 债务5：展示**可售**库存（stock − lock_stock），不是实物库存 ——
+            // 否则已被别人待支付订单占住的量会显示成"还有货"，点进去下单才发现没库存
+            vo.setStock(online ? skuStockService.available(sku) : 0);
             vo.setQuantity(it.getQuantity());
             vo.setChecked(it.getChecked());
             vo.setOffline(!online);
