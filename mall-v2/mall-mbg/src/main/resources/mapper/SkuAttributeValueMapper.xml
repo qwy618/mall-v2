@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.macro.mall.mbg.mapper.SkuAttributeValueMapper">
+
+    <!--
+      按规格反查 SKU（P2 债务 2）。每个规格组展开成 (attribute_id = ? AND value IN (...))，组间 OR，
+      再按 sku_id 分组、用 COUNT(DISTINCT attribute_id) = 组数 实现「跨属性 AND」。
+
+      🔴 不能写成 `WHERE attribute_id IN (1,10) AND value IN ('黑色','256G')`：
+         它会把「颜色 = 256G」这种根本不存在的组合也算命中（跨列笛卡尔误配）。
+      🔴 必须 COUNT(DISTINCT attribute_id)，不能 COUNT(*)：
+         同一属性传多个值时单个 SKU 也只有一行，值变多后 COUNT(*) 会把
+         「只满足一个属性」的 SKU 也算进来。
+      🔴 这里刻意 **不 join sku**：WHERE 全部落在 idx_attr_value(attribute_id, value) 上，
+         实测 EXPLAIN 稳定为 type=range、key=idx_attr_value、Using index condition；
+         而加上 join 后优化器会改选别的驱动顺序。商品ID/价格由 Service 按 sku_id 二次查即可，
+         反正那一步本来就要读 sku 表拿 price。
+    -->
+    <select id="selectSkuIdsBySpecGroups" resultType="java.lang.Long">
+        SELECT sav.sku_id
+        FROM sku_attribute_value sav
+        <where>
+            <foreach collection="groups" item="g" separator=" OR ">
+                (sav.attribute_id = #{g.attributeId}
+                AND sav.value IN
+                <foreach collection="g.values" item="v" open="(" separator="," close=")">#{v}</foreach>)
+            </foreach>
+        </where>
+        GROUP BY sav.sku_id
+        HAVING COUNT(DISTINCT sav.attribute_id) = #{groupCount}
+    </select>
+
+    <!--
+      筛选面板（facet）：某分类下、指定规格属性各取值命中的「已上架商品数」。
+      · COUNT(DISTINCT s.product_id)：按商品去重 —— 一个商品有多个 SKU 命中同一取值只算一次。
+      · p.status = 1：与列表的 status 过滤保持一致，否则面板会冒出「点了必然为空」的取值。
+      · p.category_id = ?：把 product 的访问钉在 idx_category_status 上
+        （实测不带分类会退化成 type=index 全索引扫描）。
+    -->
+    <select id="selectFacetCounts" resultType="com.macro.mall.mbg.dto.SpecFacetCount">
+        SELECT sav.attribute_id              AS attribute_id,
+               sav.value                     AS value,
+               COUNT(DISTINCT s.product_id)  AS product_count
+        FROM sku_attribute_value sav
+        JOIN sku s     ON s.id = sav.sku_id
+        JOIN product p ON p.id = s.product_id
+        WHERE p.category_id = #{categoryId}
+          AND p.status = 1
+          AND sav.attribute_id IN
+          <foreach collection="attributeIds" item="aid" open="(" separator="," close=")">#{aid}</foreach>
+        GROUP BY sav.attribute_id, sav.value
+    </select>
+
+</mapper>

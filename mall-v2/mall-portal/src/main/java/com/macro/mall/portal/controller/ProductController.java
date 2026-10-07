@@ -8,11 +8,14 @@ import com.macro.mall.mbg.mapper.ProductMapper;
 import com.macro.mall.mbg.mapper.SkuMapper;
 import com.macro.mall.mbg.model.Product;
 import com.macro.mall.mbg.model.Sku;
+import com.macro.mall.portal.dao.ProductListParam;
 import com.macro.mall.portal.search.EsProductService;
 import com.macro.mall.portal.search.EsSearchResult;
 import com.macro.mall.portal.vo.ProductDetailVO;
 import com.macro.mall.portal.vo.ProductVO;
 import com.macro.mall.service.ProductAttributeService;
+import com.macro.mall.service.vo.SpecFacetVO;
+import com.macro.mall.service.vo.SpecMatchVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -46,25 +49,21 @@ public class ProductController {
     private ProductAttributeService productAttributeService;
 
     /**
-     * 商品列表：分页 + 关键词（按名称）筛选，按 id 倒序，附 SKU 最低价
+     * 商品列表：分页 + 关键词搜索 + 分类/品牌/规格筛选，按 id 倒序，附 SKU 最低价。
+     *
+     * <p>两条路径：有 keyword → ES；否则 → DB（分类/品牌浏览 + 规格筛选）。
      */
     @GetMapping("/list")
-    public CommonResult<CommonPage<ProductVO>> list(
-            @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) Long categoryId,
-            @RequestParam(required = false) Long brandId,
-            @RequestParam(defaultValue = "1") Integer pageNum,
-            @RequestParam(defaultValue = "10") Integer pageSize) {
+    public CommonResult<CommonPage<ProductVO>> list(ProductListParam param) {
 
         // ===== 有搜索词 → 走 ES =====
-        if (keyword != null && !keyword.isBlank()) {
+        if (param.getKeyword() != null && !param.getKeyword().isBlank()) {
             try {
-                EsSearchResult r = esProductService.search(keyword, categoryId, brandId, pageNum, pageSize);
+                EsSearchResult r = esProductService.search(param.getKeyword(), param.getCategoryId(),
+                        param.getBrandId(), param.getPageNum(), param.getPageSize());
                 if (r.getIds().isEmpty()) {
                     // ⚠️ 空集直接返空页，绝不传 selectBatchIds
-                    Page<ProductVO> empty = new Page<>(pageNum, pageSize, 0);
-                    empty.setRecords(Collections.emptyList());
-                    return CommonResult.success(CommonPage.restPage(empty));
+                    return CommonResult.success(emptyProductPage(param.getPageNum(), param.getPageSize()));
                 }
                 List<Product> products = productMapper.selectBatchIds(r.getIds());
                 // ⚠️ selectBatchIds 顺序 ≠ ES 相关度顺序，必须手动按 r.ids 重排
@@ -78,33 +77,82 @@ public class ProductController {
                 List<ProductVO> vos = ordered.stream()
                         .map(p -> ProductVO.from(p, minPriceMap.get(p.getId())))
                         .collect(Collectors.toList());
-                Page<ProductVO> voPage = new Page<>(pageNum, pageSize, r.getTotal());
+                Page<ProductVO> voPage = new Page<>(param.getPageNum(), param.getPageSize(), r.getTotal());
                 voPage.setRecords(vos);
                 return CommonResult.success(CommonPage.restPage(voPage));
             } catch (Exception e) {
                 // ES 挂了降级到 DB 关键词查询，保证可用
-                log.warn("ES 搜索失败，降级 DB，kw={}", keyword, e);
+                log.warn("ES 搜索失败，降级 DB，kw={}", param.getKeyword(), e);
             }
         }
 
-        // ===== 无搜索词 或 ES 异常 → 原 DB 逻辑（分类/品牌浏览）=====
-        Page<Product> page = new Page<>(pageNum, pageSize);
-        LambdaQueryWrapper<Product> w = new LambdaQueryWrapper<>();
-        if (keyword != null && !keyword.isBlank()) {
-            w.like(Product::getName, keyword);
+        // ===== 无搜索词 或 ES 异常 → DB 逻辑（分类/品牌浏览 + 规格筛选）=====
+        Map<String, List<String>> specs = param.parseSpecs();
+
+        // 决策④ 边界：规格筛选只在「无 keyword」的 DB 路径生效 —— ES 文档里没有规格字段，
+        // 硬要做就得改索引结构。同时传 keyword 与 attrs 时忽略 attrs 并告警，另记债务（设计文档 §8.3）。
+        if (!specs.isEmpty() && param.getKeyword() != null && !param.getKeyword().isBlank()) {
+            log.warn("keyword 与 attrs 同时传入：ES 分支不支持规格筛选，本次忽略 attrs。kw={}", param.getKeyword());
+            specs = Collections.emptyMap();
         }
-        if (categoryId != null) w.eq(Product::getCategoryId, categoryId);
-        if (brandId != null) w.eq(Product::getBrandId, brandId);
+
+        // 规格筛选（P2）：先反查命中商品 + 命中 SKU 的最低价，再把商品 id 作为 in 条件交给常规分页。
+        // 之所以不自己拼 Page：并回常规分页后，total 天然就是
+        // 「再叠加分类/品牌/上架过滤之后的 DISTINCT 商品数」，省掉一个最容易算错的环节。
+        Map<Long, BigDecimal> specMinPrice = Collections.emptyMap();
+        if (!specs.isEmpty()) {
+            SpecMatchVO match = productAttributeService.matchProductsBySpecs(param.getCategoryId(), specs);
+            if (match.getProductIds().isEmpty()) {
+                // ⚠️ 空集必须直接返空页：绝不让 in() 收到空集合（会拼出 IN () 直接语法错），
+                //    与上面 ES 分支、以及历史上 selectBatchIds(空) 是同一个坑。
+                return CommonResult.success(emptyProductPage(param.getPageNum(), param.getPageSize()));
+            }
+            specMinPrice = match.getMinPriceByProduct();
+        }
+
+        Page<Product> page = new Page<>(param.getPageNum(), param.getPageSize());
+        LambdaQueryWrapper<Product> w = new LambdaQueryWrapper<>();
+        if (param.getKeyword() != null && !param.getKeyword().isBlank()) {
+            w.like(Product::getName, param.getKeyword());
+        }
+        if (param.getCategoryId() != null) w.eq(Product::getCategoryId, param.getCategoryId());
+        if (param.getBrandId() != null) w.eq(Product::getBrandId, param.getBrandId());
+        // 🔴 补上架过滤：这条路径原先不滤 status，status=0 的下架商品会混进 C 端列表
+        //    （P2 验收 #5；/product/similar 一直是滤的，这里属于漏网）。
+        w.eq(Product::getStatus, 1);
+        if (!specMinPrice.isEmpty()) {
+            w.in(Product::getId, specMinPrice.keySet());
+        }
         w.orderByDesc(Product::getId);
         productMapper.selectPage(page, w);
 
-        Map<Long, BigDecimal> minPriceMap = loadMinPrices(page.getRecords());
+        // 展示价：走规格筛选时用「命中规格那批 SKU」的最低价，否则用商品全局最低价（验收 #8）
+        Map<Long, BigDecimal> minPriceMap = specMinPrice.isEmpty()
+                ? loadMinPrices(page.getRecords())
+                : specMinPrice;
         List<ProductVO> vos = page.getRecords().stream()
                 .map(p -> ProductVO.from(p, minPriceMap.get(p.getId())))
                 .collect(Collectors.toList());
         Page<ProductVO> voPage = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
         voPage.setRecords(vos);
         return CommonResult.success(CommonPage.restPage(voPage));
+    }
+
+    /**
+     * 筛选面板数据源（P2）：某分类下「规格属性 → 可选值 → 命中（已上架）商品数」。
+     * 免登录（`/product/**` 已在 SecurityConfig 白名单）；无分类 / 无规格数据时返回 []，
+     * 前端据此整块隐藏面板 —— 筛选是增强，不该拖垮原有浏览。
+     */
+    @GetMapping("/spec-filters")
+    public CommonResult<List<SpecFacetVO>> specFilters(@RequestParam(required = false) Long categoryId) {
+        return CommonResult.success(productAttributeService.listSpecFacets(categoryId));
+    }
+
+    /** 空结果分页（total = 0、list = []）。抽出来给「反查无命中」与「ES 无命中」两处共用 */
+    private CommonPage<ProductVO> emptyProductPage(Integer pageNum, Integer pageSize) {
+        Page<ProductVO> empty = new Page<>(pageNum, pageSize, 0);
+        empty.setRecords(Collections.emptyList());
+        return CommonPage.restPage(empty);
     }
 
 //    /** 手动重灌索引（调试用） */

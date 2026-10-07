@@ -3,6 +3,16 @@ import { ElMessage } from 'element-plus'
 import router from '@/router'
 import { useUserStore } from '@/stores/user'
 
+/**
+ * 扩展请求配置：
+ * silent=true 时，业务失败 / 网络错误都不弹全局提示，交由调用方自行兜底。
+ * 用于「可选增强」类接口（如筛选面板、推荐位）——它们拿不到数据只该降级，
+ * 不该给用户弹红条。
+ */
+export interface RequestConfig extends AxiosRequestConfig {
+  silent?: boolean
+}
+
 const service = axios.create({
   baseURL: '/api',
   timeout: 10000,
@@ -34,13 +44,14 @@ function handleUnauthorized() {
 service.interceptors.response.use(
   (response) => {
     const res = response.data
+    const silent = (response.config as RequestConfig).silent === true
     // 兜底：若后端以后改为 HTTP 200 + code=401 包装，这里也能拦截
     if (res.code === 401) {
       handleUnauthorized()
       return Promise.reject(new Error(res.message || 'Unauthorized'))
     }
     if (res.code !== 200) {
-      ElMessage.error(res.message || '请求失败')
+      if (!silent) ElMessage.error(res.message || '请求失败')
       return Promise.reject(new Error(res.message || 'Error'))
     }
     return res.data
@@ -48,18 +59,19 @@ service.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     const data = error.response?.data
+    const silent = (error.config as RequestConfig | undefined)?.silent === true
     // HTTP 401 或业务 code=401：未登录 / 会话失效
     if (status === 401 || data?.code === 401) {
       handleUnauthorized()
       return Promise.reject(error)
     }
     const msg = data?.message || error.message || '网络错误'
-    ElMessage.error(msg)
+    if (!silent) ElMessage.error(msg)
     return Promise.reject(error)
   },
 )
 
 // 类型安全的请求封装：响应拦截器已解包 CommonResult，故返回业务数据 T
-export default function request<T = unknown>(config: AxiosRequestConfig): Promise<T> {
+export default function request<T = unknown>(config: RequestConfig): Promise<T> {
   return service(config) as unknown as Promise<T>
 }

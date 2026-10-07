@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.macro.mall.mbg.dto.SpecFacetCount;
+import com.macro.mall.mbg.dto.SpecQueryGroup;
 import com.macro.mall.mbg.mapper.ProductAttributeMapper;
 import com.macro.mall.mbg.mapper.ProductAttributeValueMapper;
 import com.macro.mall.mbg.mapper.ProductMapper;
@@ -16,6 +18,9 @@ import com.macro.mall.mbg.model.Sku;
 import com.macro.mall.mbg.model.SkuAttributeValue;
 import com.macro.mall.service.ProductAttributeService;
 import com.macro.mall.service.vo.AttributeItemVO;
+import com.macro.mall.service.vo.SpecFacetVO;
+import com.macro.mall.service.vo.SpecFacetValueVO;
+import com.macro.mall.service.vo.SpecMatchVO;
 import com.macro.mall.service.vo.SpecOptionVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,10 +28,12 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -254,6 +261,114 @@ public class ProductAttributeServiceImpl implements ProductAttributeService {
             out.add(new SpecOptionVO(def.getId(), def.getName(), new ArrayList<>(entry.getValue())));
         }
         out.sort(Comparator.comparingInt((SpecOptionVO vo) -> sortOf(defs.get(vo.getAttributeId()))));
+        return out;
+    }
+
+    // ==================== 读：按规格筛选（P2） ====================
+
+    @Override
+    public SpecMatchVO matchProductsBySpecs(Long categoryId, Map<String, List<String>> specs) {
+        if (categoryId == null || specs == null || specs.isEmpty()) {
+            return SpecMatchVO.empty();
+        }
+
+        // ① 属性名 → attribute_id。用 Map 承接而不是直接建 List<SpecQueryGroup>，顺带解决两件事：
+        //    · 重复属性名（?attrs=颜色:黑色,颜色:蓝色）自动合并为一组；
+        //    · 保证 groupCount == 实际组数 —— 一旦对不上，HAVING 恒不成立、静默返回空，极难排查。
+        Map<Long, LinkedHashSet<String>> byAttrId = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> entry : specs.entrySet()) {
+            String name = entry.getKey() == null ? "" : entry.getKey().trim();
+            if (name.isEmpty() || entry.getValue() == null || entry.getValue().isEmpty()) {
+                continue;
+            }
+            // 🔴 必须用**只读**的 selectByName，绝不能复用 resolveSpecAttributeId ——
+            //    那个方法查不到会「自动建属性定义」。筛选是读路径，不该被一个拼错的属性名写脏数据。
+            ProductAttribute def = selectByName(categoryId, name);
+            if (def == null || def.getType() == null || def.getType() != ProductAttribute.TYPE_SPEC) {
+                // 属性名不存在、或它是参数(type=1) —— 都不可能有商品命中，直接空结果（不报错）
+                log.info("规格筛选：分类 {} 下不存在规格属性「{}」，返回空结果", categoryId, name);
+                return SpecMatchVO.empty();
+            }
+            LinkedHashSet<String> values = byAttrId.computeIfAbsent(def.getId(), k -> new LinkedHashSet<>());
+            for (String v : entry.getValue()) {
+                if (v != null && !v.isBlank()) {
+                    values.add(v.trim());
+                }
+            }
+        }
+        byAttrId.values().removeIf(Set::isEmpty);
+        if (byAttrId.isEmpty()) {
+            return SpecMatchVO.empty();
+        }
+
+        // ② 反查命中 SKU：组间 AND、组内 OR，走 sku_attribute_value.idx_attr_value
+        List<SpecQueryGroup> groups = new ArrayList<>(byAttrId.size());
+        for (Map.Entry<Long, LinkedHashSet<String>> entry : byAttrId.entrySet()) {
+            groups.add(new SpecQueryGroup(entry.getKey(), new ArrayList<>(entry.getValue())));
+        }
+        List<Long> skuIds = skuAttributeValueMapper.selectSkuIdsBySpecGroups(groups, groups.size());
+        if (skuIds.isEmpty()) {
+            return SpecMatchVO.empty();
+        }
+
+        // ③ SKU → 商品ID + 最低价。
+        //    最低价只取「命中规格的这批 SKU」（验收 #8），不是商品全局最低价 ——
+        //    否则筛「容量=256G」时列表还显示 128G 的价，点进去对不上。
+        List<Sku> skus = skuMapper.selectBatchIds(skuIds);
+        Map<Long, BigDecimal> minPriceByProduct = new LinkedHashMap<>();
+        for (Sku sku : skus) {
+            if (sku.getProductId() == null || sku.getPrice() == null) {
+                continue;
+            }
+            minPriceByProduct.merge(sku.getProductId(), sku.getPrice(), BigDecimal::min);
+        }
+        if (minPriceByProduct.isEmpty()) {
+            return SpecMatchVO.empty();
+        }
+        return new SpecMatchVO(new ArrayList<>(minPriceByProduct.keySet()), minPriceByProduct);
+    }
+
+    @Override
+    public List<SpecFacetVO> listSpecFacets(Long categoryId) {
+        if (categoryId == null) {
+            return Collections.emptyList();
+        }
+        // 只有 type=0（规格）才有 SKU 级取值可筛；参数(type=1)是商品级、不参与筛选
+        List<ProductAttribute> defs = listDefinitions(categoryId, ProductAttribute.TYPE_SPEC);
+        if (defs.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<SpecFacetCount> counts = skuAttributeValueMapper.selectFacetCounts(categoryId,
+                defs.stream().map(ProductAttribute::getId).collect(Collectors.toList()));
+
+        Map<Long, List<SpecFacetValueVO>> byAttr = new HashMap<>();
+        for (SpecFacetCount c : counts) {
+            if (c.getValue() == null || c.getValue().isEmpty()) {
+                continue;
+            }
+            SpecFacetValueVO vo = new SpecFacetValueVO();
+            vo.setValue(c.getValue());
+            vo.setCount(c.getProductCount() == null ? 0 : c.getProductCount());
+            byAttr.computeIfAbsent(c.getAttributeId(), k -> new ArrayList<>()).add(vo);
+        }
+
+        List<SpecFacetVO> out = new ArrayList<>(defs.size());
+        for (ProductAttribute def : defs) {          // defs 已按 sort、id 排序
+            List<SpecFacetValueVO> values = byAttr.get(def.getId());
+            if (values == null || values.isEmpty()) {
+                continue;    // 该属性下没有已上架商品命中 → 整个属性不展示，避免「点了必然为空」
+            }
+            // 命中商品数倒序；并列时按取值升序 —— 顺序必须稳定，否则前端每刷一次都跳，也没法写断言
+            values.sort(Comparator
+                    .comparingInt((SpecFacetValueVO v) -> v.getCount() == null ? 0 : v.getCount())
+                    .reversed()
+                    .thenComparing(SpecFacetValueVO::getValue));
+            SpecFacetVO vo = new SpecFacetVO();
+            vo.setAttributeId(def.getId());
+            vo.setName(def.getName());
+            vo.setValues(values);
+            out.add(vo);
+        }
         return out;
     }
 

@@ -81,6 +81,21 @@
           <button v-if="hasFilter" class="filter__reset" type="button" @click="resetFilter">重置筛选</button>
         </div>
 
+        <!-- 规格筛选（P2）：每个规格属性一行，勾选后按 SKU 反查商品。
+             后端 facet 拿不到（无数据 / 接口未上线）时整块隐藏，不影响原有浏览。 -->
+        <div v-if="specGroups.length" class="filter filter--spec">
+          <div v-for="g in specGroups" :key="g.attributeId" class="filter__row">
+            <span class="filter__label">{{ g.name }}</span>
+            <span
+              v-for="v in g.values"
+              :key="v.value"
+              class="filter__opt"
+              :class="{ active: isSpecActive(g.name, v.value) }"
+              @click="toggleSpec(g.name, v.value)"
+            >{{ v.value }}<i class="filter__count">{{ v.count }}</i></span>
+          </div>
+        </div>
+
         <!-- 商品网格 -->
         <div class="goods" v-loading="loading">
           <article
@@ -281,11 +296,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import type { LocationQueryRaw } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useLoginGate } from '@/stores/loginGate'
 import { ElMessage, ElNotification } from 'element-plus'
 import { Star } from '@element-plus/icons-vue'
-import { listProducts, getProduct, getSimilarProducts } from '@/apis/product'
+import { listProducts, getProduct, getSimilarProducts, getSpecFilters } from '@/apis/product'
 import { listCategories } from '@/apis/category'
 import { listBrands } from '@/apis/brand'
 import { addCart } from '@/apis/cart'
@@ -295,7 +311,7 @@ import { addCollect, removeCollect, isCollected } from '@/apis/favorite'
 import { formatSpec } from '@/utils/spec'
 import { picMeta, fullCrop, type PicCrop } from '@/utils/picTrim'
 import PicBox from '@/components/PicBox.vue'
-import type { Product, ProductDetailVO, Sku } from '@/types/product'
+import type { Product, ProductDetailVO, Sku, SpecFilterGroup } from '@/types/product'
 import type { CategoryNode } from '@/types/category'
 import type { Brand } from '@/types/brand'
 import { toPics, type CommentStats, type ProductCommentVO } from '@/types/comment'
@@ -312,12 +328,22 @@ const brands = ref<Brand[]>([])
 const selectedCategoryId = ref<number | null>(null)
 const selectedBrandId = ref<number | null>(null)
 
+// 规格筛选（P2）：面板数据 + 已勾选项。
+// selectedSpecs 用「属性名 → 选中值列表」，与后端 attrs 参数语义一一对应：
+// 跨属性 AND（黑色 且 256GB）、同属性多值 OR（黑色 或 白色）。
+const specGroups = ref<SpecFilterGroup[]>([])
+const selectedSpecs = ref<Record<string, string[]>>({})
+
 const hotWords = ['手机', '耳机', '笔记本', '智能手表', '充电宝', '显示器', '音响', '数据线']
 
 const goodsRef = ref<HTMLElement>()
 
 const hasFilter = computed(
-  () => selectedCategoryId.value != null || selectedBrandId.value != null || keyword.value.trim() !== ''
+  () =>
+    selectedCategoryId.value != null ||
+    selectedBrandId.value != null ||
+    Object.keys(selectedSpecs.value).length > 0 ||
+    keyword.value.trim() !== ''
 )
 
 // 横向导航：顶级分类（父标题）只负责「展开/收起」二级分类子行，不在前端触发商品查询。
@@ -477,6 +503,62 @@ const commentsLoading = ref(false)
 const similarList = ref<Product[]>([])
 const similarLoading = ref(false)
 
+/**
+ * 把「属性名 → 选中值」拼成后端 attrs 参数：`颜色:黑色|白色,容量:256GB`。
+ * 无勾选时返回 undefined（不传该参数），避免后端收到空串。
+ */
+function buildAttrsParam() {
+  const parts: string[] = []
+  for (const [name, values] of Object.entries(selectedSpecs.value)) {
+    if (values.length) parts.push(`${name}:${values.join('|')}`)
+  }
+  return parts.length ? parts.join(',') : undefined
+}
+
+/**
+ * buildAttrsParam 的逆运算：把地址栏的 attrs 还原成「属性名 → 选中值」。
+ * 容错口径与后端 ProductListParam.parseSpecs 保持一致（空白段 / 缺冒号的段直接跳过），
+ * 否则刷新后会出现「前端认了、后端不认」的筛选条件，列表与面板对不上。
+ */
+function parseAttrsParam(raw: string): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const seg of raw.split(',')) {
+    const i = seg.indexOf(':')
+    if (i <= 0) continue
+    const name = seg.slice(0, i).trim()
+    const values = seg
+      .slice(i + 1)
+      .split('|')
+      .map((v) => v.trim())
+      .filter(Boolean)
+    if (name && values.length) out[name] = values
+  }
+  return out
+}
+
+/**
+ * 把筛选状态写回地址栏，让筛选结果可分享、刷新后仍在（P2 验收 #9）。
+ *
+ * 只写筛选相关的键，其余 query 原样保留（例如 pid 由 consumePidQuery 自己摘掉）。
+ * 用 replace 而不是 push：切筛选不该往浏览器历史里塞一堆记录。
+ * ⚠️ 必须与当前 query 逐键比较后再写 —— 否则和 watch(route.query.keyword) 互相触发，
+ *    会变成「改 URL → 触发 watch → 再改 URL」的死循环。
+ */
+function syncFilterQuery() {
+  const next: LocationQueryRaw = { ...route.query }
+  const put = (key: string, value?: string) => {
+    if (value) next[key] = value
+    else delete next[key]
+  }
+  put('keyword', keyword.value.trim() || undefined)
+  put('categoryId', selectedCategoryId.value != null ? String(selectedCategoryId.value) : undefined)
+  put('brandId', selectedBrandId.value != null ? String(selectedBrandId.value) : undefined)
+  put('attrs', buildAttrsParam())
+  if (JSON.stringify(route.query) !== JSON.stringify(next)) {
+    router.replace({ query: next })
+  }
+}
+
 async function fetchList() {
   loading.value = true
   try {
@@ -484,6 +566,7 @@ async function fetchList() {
       keyword: keyword.value || undefined,
       categoryId: selectedCategoryId.value ?? undefined,
       brandId: selectedBrandId.value ?? undefined,
+      attrs: buildAttrsParam(),
       pageNum: pageNum.value,
       pageSize: pageSize.value,
     })
@@ -492,6 +575,8 @@ async function fetchList() {
   } finally {
     loading.value = false
   }
+  // 每次列表刷新后同步地址栏：筛选状态一律已落定（切分类会先等面板重拉+剔除失效勾选）
+  syncFilterQuery()
 }
 
 async function fetchCategories() {
@@ -502,19 +587,64 @@ async function fetchBrands() {
   brands.value = await listBrands(selectedCategoryId.value ?? undefined)
 }
 
+/**
+ * 拉取筛选面板（该分类下的规格属性 → 可选值 → 命中商品数）。
+ * 接口未就绪或无数据时静默留空，模板据此整块隐藏 —— 筛选是增强，不该拖垮原有浏览。
+ */
+async function fetchSpecFilters() {
+  try {
+    specGroups.value = (await getSpecFilters(selectedCategoryId.value ?? undefined)) || []
+  } catch {
+    specGroups.value = []
+  }
+  // 换分类后，原先勾的值可能在新分类里并不存在 → 只保留仍出现在面板里的项
+  const kept: Record<string, string[]> = {}
+  for (const g of specGroups.value) {
+    const picked = (selectedSpecs.value[g.name] || []).filter((v) =>
+      g.values.some((x) => x.value === v)
+    )
+    if (picked.length) kept[g.name] = picked
+  }
+  selectedSpecs.value = kept
+}
+
+function isSpecActive(name: string, value: string) {
+  return (selectedSpecs.value[name] || []).includes(value)
+}
+
+function toggleSpec(name: string, value: string) {
+  const cur = selectedSpecs.value[name] || []
+  const next = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value]
+  if (next.length) {
+    selectedSpecs.value = { ...selectedSpecs.value, [name]: next }
+  } else {
+    const rest = { ...selectedSpecs.value }
+    delete rest[name]
+    selectedSpecs.value = rest
+  }
+  pageNum.value = 1
+  fetchList()
+}
+
+/** 选中叶子子分类时自动展开其所属顶级分类，让导航高亮可见；categories 未到位时按自身兜底 */
+function expandForCategory(id: number | null) {
+  if (id == null) {
+    expandedTopId.value = null
+    return
+  }
+  const parent = categories.value.find((c) => (c.children || []).some((s) => s.id === id))
+  expandedTopId.value = parent ? parent.id : id
+}
+
 function selectCategory(id: number | null) {
   selectedCategoryId.value = id
   selectedBrandId.value = null
   pageNum.value = 1
-  if (id == null) {
-    expandedTopId.value = null
-  } else {
-    // 选中的若是叶子子分类，自动展开其所属父级，方便看到高亮
-    const parent = categories.value.find((c) => (c.children || []).some((s) => s.id === id))
-    expandedTopId.value = parent ? parent.id : id
-  }
+  expandForCategory(id)
   fetchBrands()
-  fetchList()
+  // 规格面板是按分类聚合的，换分类必须重拉；旧勾选由 fetchSpecFilters 按新面板自动过滤，
+  // 且必须等它落地再查列表（否则会带着上一分类的规格去筛）
+  fetchSpecFilters().then(fetchList)
 }
 
 function selectBrand(id: number | null) {
@@ -526,11 +656,12 @@ function selectBrand(id: number | null) {
 function resetFilter() {
   selectedCategoryId.value = null
   selectedBrandId.value = null
+  selectedSpecs.value = {}
   keyword.value = ''
   pageNum.value = 1
   expandedTopId.value = null
   fetchBrands()
-  fetchList()
+  fetchSpecFilters().then(fetchList)
 }
 
 function onPageChange(p: number) {
@@ -744,13 +875,28 @@ function consumePidQuery() {
 }
 
 onMounted(() => {
-  const q = route.query.keyword
-  if (typeof q === 'string' && q.trim()) {
-    keyword.value = q
+  // ① 先按地址栏还原筛选状态 —— 刷新页面 / 打开分享链接时筛选项还在（P2 验收 #9）。
+  //    attrs 故意放在 fetchSpecFilters 之前赋值：后者会按新面板剔除失效勾选，
+  //    正好把「URL 里带了当前分类并不存在的取值」一并清掉，不用另写一套校验。
+  const q = route.query
+  const toId = (v: unknown): number | null => {
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0 ? n : null
   }
-  fetchCategories()
+  const kw = q.keyword
+  if (typeof kw === 'string' && kw.trim()) {
+    keyword.value = kw
+  }
+  selectedCategoryId.value = toId(q.categoryId)
+  selectedBrandId.value = toId(q.brandId)
+  if (typeof q.attrs === 'string' && q.attrs) {
+    selectedSpecs.value = parseAttrsParam(q.attrs)
+  }
+  // ② 再拉数据。分类到位后才能算出「该展开哪个顶级分类」，故放在 then 里
+  fetchCategories().then(() => expandForCategory(selectedCategoryId.value))
   fetchBrands()
-  fetchList()
+  // 先等筛选面板落地再查列表：面板会校验并带回需要保留的勾选状态
+  fetchSpecFilters().then(fetchList)
   // 从「我的收藏」/ 助手商品卡点进来：带 pid 直接打开商品详情抽屉
   consumePidQuery()
 })
@@ -992,6 +1138,35 @@ watch(
 .filter__reset:hover {
   color: var(--mall-primary);
   border-color: var(--mall-primary);
+}
+
+/* 规格筛选（P2）：一个属性一行，与品牌行共用 .filter 外观，只是由横向 flex 改为纵向堆叠 */
+.filter--spec {
+  display: block;
+  padding: 6px 14px;
+}
+.filter__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 5px 0;
+}
+.filter__row + .filter__row {
+  border-top: 1px dashed var(--mall-border);
+}
+.filter__row .filter__label {
+  min-width: 40px;
+  flex: none;
+}
+.filter__count {
+  margin-left: 3px;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--mall-text-light);
+}
+.filter__opt.active .filter__count {
+  color: inherit;
 }
 
 .goods {

@@ -41,6 +41,20 @@ export interface SpecOption {
   values: string[]
 }
 
+/** 筛选面板里的一个可选值及其命中商品数（P2） */
+export interface SpecFilterValue {
+  value: string
+  /** 该分类下拥有此值且已上架的商品数；仅面板展示，不参与筛选 */
+  count: number
+}
+
+/** 筛选面板里的一个规格属性（如 颜色 → 黑色/白色…），供列表页反查筛选（P2） */
+export interface SpecFilterGroup {
+  attributeId: number
+  name: string
+  values: SpecFilterValue[]
+}
+
 export interface ProductDetailVO {
   product: Product
   skus: Sku[]
